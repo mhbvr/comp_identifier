@@ -15,6 +15,8 @@ type Segmentation struct {
 	// Rect is the minimum-area rectangle around the component body in
 	// source image coordinates, normalised so that W >= H.
 	Rect RotatedRect
+	// Area is the body's share of the image area, in [0,1].
+	Area float64
 	// Mask is the final body mask at working resolution (debug aid).
 	Mask *Mask
 	// Foreground is the background-normalised "darkness" map used for
@@ -81,11 +83,13 @@ func foregroundMap(rgb rgbPlanes) *Plane {
 
 // Segment finds the component in a photo taken on a white background and
 // returns its oriented bounding rectangle.
-func Segment(img image.Image, workSize int) (*Segmentation, error) {
-	if workSize <= 0 {
-		workSize = 640
-	}
-	rgb, scale := downscaleRGB(toRGBA(img), workSize)
+//
+// Only WorkSize and MinArea of opt are used. A blob smaller than MinArea
+// (a shadow, dust, a dark image corner) is not a component and yields
+// ErrNoComponent, which is how an empty scene is recognised.
+func Segment(img image.Image, opt Options) (*Segmentation, error) {
+	opt = opt.withDefaults()
+	rgb, scale := downscaleRGB(toRGBA(img), opt.WorkSize)
 	fg := foregroundMap(rgb)
 	t := otsu(fg)
 	// Guard against nearly empty images where Otsu splits noise.
@@ -95,10 +99,7 @@ func Segment(img image.Image, workSize int) (*Segmentation, error) {
 	mask := threshold(fg, t)
 
 	w, h := mask.W, mask.H
-	short := w
-	if h < short {
-		short = h
-	}
+	short := min(w, h)
 	// Close small gaps (light marking text, glare streaks on the body).
 	mask = closeM(mask, max(1, short/100))
 	labels, comps := components(mask)
@@ -120,9 +121,13 @@ func Segment(img image.Image, workSize int) (*Segmentation, error) {
 		}
 	}
 
+	area := float64(body.Count()) / float64(w*h)
+	if area < opt.MinArea {
+		return nil, ErrNoComponent
+	}
 	hull := convexHull(maskBoundary(body))
 	rect := minAreaRect(hull).Landscape().Scale(scale)
-	return &Segmentation{Rect: rect, Mask: body, Foreground: fg, Scale: scale, Threshold: t}, nil
+	return &Segmentation{Rect: rect, Area: area, Mask: body, Foreground: fg, Scale: scale, Threshold: t}, nil
 }
 
 func largest(comps []component, minArea int) *component {

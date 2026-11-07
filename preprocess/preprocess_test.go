@@ -146,7 +146,7 @@ func synthPhoto(angle float64, nChars int) (image.Image, RotatedRect) {
 func TestSegmentSynthetic(t *testing.T) {
 	for _, deg := range []float64{0, 17, 45, -62} {
 		img, want := synthPhoto(deg*math.Pi/180, 6)
-		seg, err := Segment(img, 640)
+		seg, err := Segment(img, Options{})
 		if err != nil {
 			t.Fatalf("%v°: %v", deg, err)
 		}
@@ -203,7 +203,22 @@ func TestSegmentEmptyImage(t *testing.T) {
 	for i := range img.Pix {
 		img.Pix[i] = 250
 	}
-	if _, err := Segment(img, 640); err != ErrNoComponent {
+	if _, err := Segment(img, Options{}); err != ErrNoComponent {
+		t.Errorf("err = %v, want ErrNoComponent", err)
+	}
+}
+
+func TestSegmentVignettedBlank(t *testing.T) {
+	// Strongly vignetted, slightly tinted paper with no component.
+	img := image.NewRGBA(image.Rect(0, 0, 1440, 1080))
+	for y := 0; y < 1080; y++ {
+		for x := 0; x < 1440; x++ {
+			d := float64((x-720)*(x-720)+(y-540)*(y-540)) / (900 * 900)
+			v := uint8(245 - 50*d)
+			img.SetRGBA(x, y, color.RGBA{v - 15, v, v, 255})
+		}
+	}
+	if _, err := Segment(img, Options{}); err != ErrNoComponent {
 		t.Errorf("err = %v, want ErrNoComponent", err)
 	}
 }

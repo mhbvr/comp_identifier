@@ -26,7 +26,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/mhbvr/comp_identifier/marking"
@@ -49,7 +48,7 @@ type flags struct {
 }
 
 func main() {
-	reexecWithOpenMPLimit()
+	ocr.LimitOpenMPThreads()
 
 	var f flags
 	flag.StringVar(&f.debugDir, "debug", "", "write intermediate images to this directory")
@@ -85,22 +84,6 @@ func main() {
 	}
 }
 
-// reexecWithOpenMPLimit restarts the process with OMP_THREAD_LIMIT=1 unless
-// the variable is already set. Tesseract's OpenMP parallelism costs far
-// more than it gains on images this small (about 4x slower here), and
-// libgomp reads the limit only at process start-up.
-func reexecWithOpenMPLimit() {
-	if os.Getenv("OMP_THREAD_LIMIT") != "" {
-		return
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		return
-	}
-	env := append(os.Environ(), "OMP_THREAD_LIMIT=1")
-	_ = syscall.Exec(exe, os.Args, env) // returns only on failure
-}
-
 func (f flags) options() marking.Options {
 	opt := marking.DefaultOptions()
 	opt.OCR.Languages = strings.Split(f.lang, "+")
@@ -108,7 +91,6 @@ func (f flags) options() marking.Options {
 	opt.OCR.PageSegMode = ocr.PageSegMode(f.psm)
 	opt.OCR.Whitelist = f.whitelist
 	opt.Preprocess.Enhance.CharHeight = f.charHeight
-	opt.KeepImages = f.debugDir != ""
 	return opt
 }
 

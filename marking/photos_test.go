@@ -9,19 +9,16 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
+
+	"github.com/mhbvr/comp_identifier/ocr"
 )
 
 // TestMain re-executes the test binary with OMP_THREAD_LIMIT=1: Tesseract's
 // OpenMP threading makes OCR of small images several times slower, and the
 // limit is only read at process start.
 func TestMain(m *testing.M) {
-	if os.Getenv("OMP_THREAD_LIMIT") == "" {
-		if exe, err := os.Executable(); err == nil {
-			_ = syscall.Exec(exe, os.Args, append(os.Environ(), "OMP_THREAD_LIMIT=1"))
-		}
-	}
+	ocr.LimitOpenMPThreads()
 	os.Exit(m.Run())
 }
 
