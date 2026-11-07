@@ -21,6 +21,7 @@ import (
 	"os/signal"
 
 	"github.com/mhbvr/comp_identifier/camera"
+	"github.com/mhbvr/comp_identifier/claude"
 	"github.com/mhbvr/comp_identifier/marking"
 	"github.com/mhbvr/comp_identifier/ocr"
 	"github.com/mhbvr/comp_identifier/tracker"
@@ -35,6 +36,8 @@ func main() {
 	camCA := flag.String("camera-ca", "", "PEM CA certificate to trust for an https:// camera")
 	useCapture := flag.Bool("capture", true, "recognise full-resolution captures (POST /api/capture); false: use stream frames")
 	tessdata := flag.String("tessdata", "", "Tesseract tessdata directory (default: system models)")
+	useClaude := flag.Bool("claude", true, "offer identification with the Claude API (needs ANTHROPIC_API_KEY or 'ant auth login')")
+	claudeModel := flag.String("claude-model", claude.DefaultModel, "Claude model for identification")
 	flag.Parse()
 
 	cam := camera.New(*camURL)
@@ -71,7 +74,11 @@ func main() {
 	t := tracker.New(tracker.Config{}, source, capture, reader.Read)
 	go t.Run(ctx)
 
-	srv := &http.Server{Addr: *listen, Handler: web.New(t, frames)}
+	var identifier *claude.Identifier
+	if *useClaude {
+		identifier = claude.New(*claudeModel)
+	}
+	srv := &http.Server{Addr: *listen, Handler: web.New(t, frames, identifier)}
 	go func() {
 		<-ctx.Done()
 		srv.Close()
