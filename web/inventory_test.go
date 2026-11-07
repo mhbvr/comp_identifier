@@ -78,7 +78,9 @@ func TestAddKnownComponent(t *testing.T) {
 	srv, tr := trackedServer(t, "3AT4\nLM35DZ", nil, inv)
 
 	panel := waitPanel(t, srv.URL, "Add item of LM35DZ")
-	for _, want := range []string{"temperature sensor", "found by name", "or add to:"} {
+	lm35, _ := inv.ComponentByName("LM35")
+	for _, want := range []string{"temperature sensor", "found by name", "or add to:",
+		fmt.Sprintf("component #%d", cid), fmt.Sprintf("LM35 (#%d)", lm35.ID)} {
 		if !strings.Contains(panel, want) {
 			t.Errorf("panel lacks %q", want)
 		}
