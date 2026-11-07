@@ -73,7 +73,10 @@ browser ─► web POST /claude/{id} ─► claude.Identify ─► Claude API
 ## Runtime requirements
 
 - Go 1.25+ to build (the Anthropic SDK needs it), with cgo (the ONNX Runtime binding needs it).
-- **ONNX Runtime 1.31 or newer**, as a shared library, at run time. Pass `-onnxruntime PATH` or set
+- **ONNX Runtime 1.19 or newer**, as a shared library, at run time. The Go binding is pinned to
+  `yalue/onnxruntime_go` v1.12.0, which asks for C API version 19; newer binding releases ask for
+  the newest API version and refuse older libraries, such as Arch Linux's 1.29. Tested with 1.19.2,
+  1.29.0 and 1.31.0, with identical results. Pass `-onnxruntime PATH` or set
   `$ONNXRUNTIME_LIB`; otherwise `libonnxruntime.so` is looked up on the library search path.
   Official builds for Linux x86-64 and aarch64 (Raspberry Pi 4 with a 64-bit OS) are on the
   [ONNX Runtime releases page](https://github.com/microsoft/onnxruntime/releases).

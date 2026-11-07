@@ -15,7 +15,13 @@
 // written up in doc/text-recognition.md.
 //
 // ONNX Runtime itself is a shared library loaded at run time (cgo); see
-// Config.Library.
+// Config.Library. Any ONNX Runtime from 1.19 on works: the Go binding
+// (github.com/yalue/onnxruntime_go) is deliberately pinned to v1.12.0,
+// which asks the library for C API version 19, and ONNX Runtime libraries
+// keep serving older API versions. Newer binding releases ask for the
+// newest API and so refuse distribution packages that lag behind (Arch
+// ships 1.29, for example). Only basic API calls are used, so nothing is
+// lost by the old pin; tests pass with ONNX Runtime 1.19, 1.29 and 1.31.
 package ocr
 
 import (
@@ -35,8 +41,9 @@ import (
 
 // Config configures an Engine.
 type Config struct {
-	// Library is the path of the ONNX Runtime shared library (version 1.31
-	// or newer), e.g. /opt/onnxruntime/lib/libonnxruntime.so.1.31.0.
+	// Library is the path of the ONNX Runtime shared library (version 1.19
+	// or newer), e.g. /usr/lib/libonnxruntime.so or
+	// /opt/onnxruntime/lib/libonnxruntime.so.1.29.0.
 	// Empty: $ONNXRUNTIME_LIB, else "libonnxruntime.so" (.dylib on macOS),
 	// found through the system's library search path.
 	Library string
@@ -96,7 +103,7 @@ func initRuntime(library string) error {
 	initOnce.Do(func() {
 		ort.SetSharedLibraryPath(library)
 		if err := ort.InitializeEnvironment(); err != nil {
-			initErr = fmt.Errorf("ocr: cannot load ONNX Runtime %q (install ONNX Runtime 1.31+ and set -onnxruntime or $ONNXRUNTIME_LIB): %w", library, err)
+			initErr = fmt.Errorf("ocr: cannot load ONNX Runtime %q (install ONNX Runtime 1.19+ and set -onnxruntime or $ONNXRUNTIME_LIB): %w", library, err)
 		}
 	})
 	return initErr

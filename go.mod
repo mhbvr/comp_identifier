@@ -4,7 +4,7 @@ go 1.25
 
 require (
 	github.com/anthropics/anthropic-sdk-go/v2 v2.7.0
-	github.com/yalue/onnxruntime_go v1.38.0
+	github.com/yalue/onnxruntime_go v1.12.0
 )
 
 require (
