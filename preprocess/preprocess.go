@@ -28,6 +28,9 @@ type Options struct {
 	// WorkSize is the longest side, in pixels, of the downscaled image used
 	// for segmentation. Default 640.
 	WorkSize int
+	// MinArea is the smallest body area, as a fraction of the image, that
+	// counts as a component. Default 0.004.
+	MinArea float64
 	// Margin enlarges the detected rectangle on every side by this fraction
 	// of its short side. Default 0.04.
 	Margin float64
@@ -41,6 +44,9 @@ type Options struct {
 func (o Options) withDefaults() Options {
 	if o.WorkSize <= 0 {
 		o.WorkSize = 640
+	}
+	if o.MinArea == 0 {
+		o.MinArea = 0.004
 	}
 	if o.Margin == 0 {
 		o.Margin = 0.04
@@ -73,7 +79,7 @@ type Result struct {
 func Process(img image.Image, opt Options) (*Result, error) {
 	opt = opt.withDefaults()
 	src := toRGBA(img)
-	seg, err := Segment(src, opt.WorkSize)
+	seg, err := Segment(src, opt)
 	if err != nil {
 		return nil, err
 	}

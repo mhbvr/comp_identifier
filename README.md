@@ -2,8 +2,10 @@
 
 Identify electronic components (ICs, MOSFETs, BJTs, regulators, …) from photos.
 
-This first stage reads the **marking text** on a component photographed on a
-white background. It's written in Go and runs fully locally (Tesseract OCR).
+It reads the **marking text** on a component lying on a white background, either
+from photos (`compid`) or live under a camera in a web app (`compweb`). It's
+written in Go and runs fully locally (Tesseract OCR). There is no component
+database yet: the result is the text on the part.
 
 ```
 photo ──► segment ──► rotate + crop ──► enhance ──► OCR × 4 orientations ──► best text
@@ -14,7 +16,12 @@ photo ──► segment ──► rotate + crop ──► enhance ──► OCR 
 | `preprocess` | finds the component, aligns and crops it, builds OCR-ready images | pure Go, stdlib only |
 | `ocr` | small engine interface over Tesseract: in-process `LibEngine` (C API via cgo) or `CLIEngine` (runs `tesseract`) | libtesseract / tesseract binary |
 | `marking` | glue: preprocess → OCR every variant at 0/90/180/270° → pick the most confident reading | — |
+| `camera` | client for the [camera_rpi](https://github.com/mhbvr/camera_rpi) REST API: MJPEG stream and captures (read-only) | — |
+| `tracker` | watches the stream: detects a placed / moved / removed component, recognises it | — |
+| `web` | the web UI: `html/template` pages, MJPEG relay | — |
+| `cmd/compweb` | the web app | — |
 | `cmd/compid` | command-line tool, debug image dump, accuracy evaluation | — |
+| `cmd/photocam` | fake camera serving photos, for developing `compweb` without a Pi | — |
 
 ## Install
 
@@ -23,13 +30,55 @@ sudo apt-get install -y tesseract-ocr tesseract-ocr-eng libtesseract-dev liblept
 ```
 
 ```bash
-go build ./cmd/compid
+go build ./cmd/compid ./cmd/compweb
 ```
 
 You can also build with `CGO_ENABLED=0`. Then only the `tesseract` binary is needed at run time, and the
 `CLIEngine` is used automatically (it is about 3× slower).
 
-## Usage
+## Web app
+
+```bash
+./compweb -camera http://raspberrypi.local:8080 -listen :8090
+```
+
+Open `http://localhost:8090`. The page shows the live camera view with a rectangle around the component:
+
+- **orange**: a component is detected and is being recognised;
+- **green**: the text was read with high confidence;
+- **red**: the text was read, but with low confidence.
+
+Next to the video it shows the recognised text and the two images it came from: the aligned crop of the
+component and the OCR input. Take the component away and put the next one down; earlier readings are listed
+under *Previous components*.
+
+How it works:
+- **Live view.** `compweb` reads the camera's `/stream.mjpeg` once and relays the frames unchanged to every
+  browser (`/live.mjpeg`), so the page needs no video JavaScript.
+- **Detection.** About five times a second the tracker segments the newest frame. A component counts as
+  placed once it has stayed still for 3 detections. It counts as removed after 3 empty ones. If it moves,
+  turns or is replaced, it is recognised again.
+- **Recognition.** Each attempt takes a full-resolution capture (`POST /api/capture`, 2028×1520, the same as
+  the sample photos) and reads it, which takes about a second. There are up to 3 attempts, and the best
+  reading is kept. It stops early on a reliable reading: mean character confidence ≥ 97, or two
+  independent image variants reading exactly the same text. On the sample photos both rules were right
+  about 9 times out of 10, but most correct readings don't reach them, so expect red often.
+- **Read-only.** Camera settings are never changed. `-capture=false` recognises stream frames instead of
+  captures. `-camera-ca certs/ca.crt` trusts camera_rpi's own CA for an `https://` camera.
+- **The page** is two `html/template` templates. A few lines of inline JavaScript re-fetch the dynamic part
+  (`/panel`: the SVG rectangle and the result panel) every 300 ms. There are no third-party dependencies.
+
+Without a Pi, the fake camera shows each photo for 8 s, then empty paper for 3 s, in a loop:
+
+```bash
+go run ./cmd/photocam -listen :8080 components_photos/*.jpg
+```
+
+```bash
+go run ./cmd/compweb -camera http://localhost:8080
+```
+
+## Command line
 
 ```bash
 ./compid components_photos/IMG_20261107_115535.jpg
@@ -48,8 +97,9 @@ As a library:
 r, err := marking.NewReader(marking.DefaultOptions())
 if err != nil { ... }
 defer r.Close()            // a Reader is not goroutine-safe; use one per goroutine
-res, err := r.Read(img)    // img is any image.Image
+res, err := r.Read(img)    // img is any image.Image; preprocess.ErrNoComponent if empty
 fmt.Println(res.Text)      // lines separated by "\n"
+fmt.Println(res.Reliable)  // high-confidence reading?
 // res.Candidates: all readings, best first. res.Preprocess: crop, masks, variants.
 ```
 
@@ -58,11 +108,12 @@ fmt.Println(res.Text)      // lines separated by "\n"
 ### Performance note: `OMP_THREAD_LIMIT=1`
 
 Tesseract's OpenMP threading makes OCR of these small images about **4–5× slower**: 4.4 s vs 0.9 s per photo
-on one core. libgomp reads the limit only at process start. `compid` and the test binary re-exec themselves
-with `OMP_THREAD_LIMIT=1`. **Programs that use the library should set it in their environment too.** To use
+on one core. libgomp reads the limit only at process start. `compid`, `compweb` and the test binaries call
+`ocr.LimitOpenMPThreads()`, which re-execs the process with `OMP_THREAD_LIMIT=1`. **Programs that use
+the library should do the same, or set the variable in their environment.** To use
 several cores, run several `Reader`s in parallel, as `compid` does.
 
-## How it works
+## How recognition works
 
 1. **Segment** (`preprocess/segment.go`). The photo is downscaled to about 640 px. A *foreground map* measures
    how much darker each pixel is than the local white level. It is based on `min(R,G,B)`, so black epoxy and

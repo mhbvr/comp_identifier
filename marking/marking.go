@@ -20,29 +20,38 @@ import (
 type Options struct {
 	Preprocess preprocess.Options
 	OCR        ocr.Config
-	// MinWordConfidence drops words below this Tesseract confidence from
-	// the final text (they still count, weakly, towards scoring). Default 30.
+	// MinWordConfidence drops words below this mean character confidence
+	// from the final text (they still count, weakly, towards scoring).
+	// Default 30.
 	MinWordConfidence float64
+	// ReliableConfidence is the mean confidence from which a reading is
+	// considered reliable on its own (see Result.Reliable). Default 97.
+	ReliableConfidence float64
 	// Rotations to try, in clockwise quarter turns. Default {0,1,2,3}.
 	Rotations []int
-	// Variants restricts which preprocess variants are OCR'd (by name:
-	// "clean", "soft", "tophat", and the same with an "-inv" suffix when
-	// the marking polarity was ambiguous). Empty means all.
-	Variants []string
-	// KeepImages stores the OCR input image in every Candidate.
-	KeepImages bool
 }
 
 // DefaultOptions returns options tuned for component markings.
-func DefaultOptions() Options {
-	return Options{
-		OCR:               ocr.DefaultConfig(),
-		MinWordConfidence: 30,
-		Rotations:         []int{0, 1, 2, 3},
+func DefaultOptions() Options { return Options{}.withDefaults() }
+
+func (o Options) withDefaults() Options {
+	if o.MinWordConfidence == 0 {
+		o.MinWordConfidence = 30
 	}
+	if o.ReliableConfidence == 0 {
+		o.ReliableConfidence = 97
+	}
+	if len(o.Rotations) == 0 {
+		o.Rotations = []int{0, 1, 2, 3}
+	}
+	// A zero OCR config means "use the defaults tuned for markings".
+	if len(o.OCR.Languages) == 0 && o.OCR.Whitelist == "" && o.OCR.PageSegMode == 0 && !o.OCR.DisableDictionary {
+		o.OCR = ocr.DefaultConfig()
+	}
+	return o
 }
 
-// Candidate is one OCR attempt.
+// Candidate is one OCR attempt: one variant at one rotation.
 type Candidate struct {
 	Variant string
 	// Rotation applied to the aligned crop before OCR, in degrees
@@ -50,7 +59,8 @@ type Candidate struct {
 	Rotation int
 	OCR      *ocr.Result
 	Score    float64
-	Image    *image.Gray // only with Options.KeepImages
+	// Image is the OCR input (the variant after rotation).
+	Image *image.Gray
 }
 
 // Result is the outcome of reading one photo.
@@ -60,8 +70,20 @@ type Result struct {
 	Lines []string
 	// Words that passed MinWordConfidence.
 	Words []ocr.Word
-	// Confidence is the mean confidence of Words, in [0,100].
+	// Confidence is the mean character confidence of Words, in [0,100].
 	Confidence float64
+	// Key is the marking normalised for comparing readings: upper case,
+	// no spaces, only words of two or more characters.
+	Key string
+	// Agreement counts the other variants that, at the winning rotation,
+	// read exactly the same Key. Independent variants agreeing is a strong
+	// sign the reading is right.
+	Agreement int
+	// Reliable is true when the reading is likely correct: Confidence is
+	// at least Options.ReliableConfidence, or another variant agrees.
+	// Measured on the sample photos, both rules are right about 9 times
+	// out of 10; most correct readings are not marked reliable, though.
+	Reliable bool
 	// Best is the winning candidate; Candidates holds all of them, best
 	// first.
 	Best       Candidate
@@ -93,20 +115,6 @@ func NewReaderWithEngine(e ocr.Engine, opt Options) *Reader {
 	return &Reader{engine: e, opt: opt.withDefaults()}
 }
 
-func (o Options) withDefaults() Options {
-	if o.MinWordConfidence == 0 {
-		o.MinWordConfidence = 30
-	}
-	if len(o.Rotations) == 0 {
-		o.Rotations = []int{0, 1, 2, 3}
-	}
-	// A zero OCR config means "use the defaults tuned for markings".
-	if len(o.OCR.Languages) == 0 && o.OCR.Whitelist == "" && o.OCR.PageSegMode == 0 && !o.OCR.DisableDictionary {
-		o.OCR = ocr.DefaultConfig()
-	}
-	return o
-}
-
 // Close releases the OCR engine if the Reader owns it.
 func (r *Reader) Close() error {
 	if r.owned && r.engine != nil {
@@ -117,7 +125,8 @@ func (r *Reader) Close() error {
 	return nil
 }
 
-// Read preprocesses img and recognises the marking on it.
+// Read preprocesses img and recognises the marking on it. It returns
+// preprocess.ErrNoComponent if there is no component in the image.
 func (r *Reader) Read(img image.Image) (*Result, error) {
 	pre, err := preprocess.Process(img, r.opt.Preprocess)
 	if err != nil {
@@ -130,58 +139,61 @@ func (r *Reader) Read(img image.Image) (*Result, error) {
 func (r *Reader) ReadPreprocessed(pre *preprocess.Result) (*Result, error) {
 	var cands []Candidate
 	for _, v := range pre.Variants {
-		if !r.wantVariant(v.Name) {
-			continue
-		}
 		for _, q := range r.opt.Rotations {
 			im := preprocess.RotateGray(v.Image, q)
 			res, err := r.engine.Recognize(im)
 			if err != nil {
 				return nil, fmt.Errorf("marking: OCR of %s@%d failed: %w", v.Name, q*90, err)
 			}
-			c := Candidate{Variant: v.Name, Rotation: ((q % 4) + 4) % 4 * 90, OCR: res, Score: score(res)}
-			if r.opt.KeepImages {
-				c.Image = im
-			}
-			cands = append(cands, c)
+			cands = append(cands, Candidate{
+				Variant: v.Name, Rotation: (q%4 + 4) % 4 * 90,
+				OCR: res, Score: score(res), Image: im,
+			})
 		}
 	}
 	if len(cands) == 0 {
 		return nil, fmt.Errorf("marking: no variants to OCR")
 	}
-	sortCandidates(cands)
-	best := cands[0]
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].Score > cands[j].Score })
 
+	best := cands[0]
 	out := &Result{Best: best, Candidates: cands, Preprocess: pre}
-	filtered := &ocr.Result{}
 	var sum float64
+	kept := &ocr.Result{}
 	for _, w := range best.OCR.Words {
 		cc := w.CharConfidence()
 		if cc < r.opt.MinWordConfidence || alnumCount(w.Text) == 0 {
 			continue
 		}
-		filtered.Words = append(filtered.Words, w)
+		kept.Words = append(kept.Words, w)
 		sum += cc
 	}
-	out.Words = filtered.Words
-	out.Lines = filtered.Lines()
+	out.Words = kept.Words
+	out.Lines = kept.Lines()
 	out.Text = strings.Join(out.Lines, "\n")
-	if len(filtered.Words) > 0 {
-		out.Confidence = sum / float64(len(filtered.Words))
+	if len(kept.Words) > 0 {
+		out.Confidence = sum / float64(len(kept.Words))
 	}
+
+	out.Key = r.key(best.OCR)
+	for _, c := range cands[1:] {
+		if out.Key != "" && c.Rotation == best.Rotation && r.key(c.OCR) == out.Key {
+			out.Agreement++
+		}
+	}
+	out.Reliable = out.Key != "" && (out.Confidence >= r.opt.ReliableConfidence || out.Agreement > 0)
 	return out, nil
 }
 
-func (r *Reader) wantVariant(name string) bool {
-	if len(r.opt.Variants) == 0 {
-		return true
-	}
-	for _, v := range r.opt.Variants {
-		if v == name {
-			return true
+// key normalises a reading for comparison (see Result.Key).
+func (r *Reader) key(res *ocr.Result) string {
+	var b strings.Builder
+	for _, w := range res.Words {
+		if alnumCount(w.Text) >= 2 && w.CharConfidence() >= r.opt.MinWordConfidence {
+			b.WriteString(w.Text)
 		}
 	}
-	return false
+	return Normalize(b.String())
 }
 
 // score rates an OCR result: it rewards many confidently recognised
@@ -217,8 +229,4 @@ func alnumCount(s string) int {
 		}
 	}
 	return n
-}
-
-func sortCandidates(c []Candidate) {
-	sort.SliceStable(c, func(i, j int) bool { return c[i].Score > c[j].Score })
 }
