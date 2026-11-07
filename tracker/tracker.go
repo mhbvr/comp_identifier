@@ -7,7 +7,7 @@
 //	                                 ▲      │                    or Unreliable (red)
 //	                                 │      └─ up to MaxAttempts captures
 //	         moved / replaced ───────┘
-//	removed (MissFrames detections without it) ──► Empty, reading goes to history
+//	removed (MissFrames detections without it) ──► Empty
 //
 // Detection is cheap (segmentation of a downscaled stream frame) and runs
 // several times a second. Recognition is expensive (OCR, about a second)
@@ -48,7 +48,6 @@ type Config struct {
 	StableFrames int           // still detections before recognising; default 3
 	MissFrames   int           // empty detections before "removed"; default 3
 	MaxAttempts  int           // recognition attempts per component; default 3
-	History      int           // finished readings kept; default 8
 	Detect       preprocess.Options
 }
 
@@ -64,9 +63,6 @@ func (c Config) withDefaults() Config {
 	}
 	if c.MaxAttempts <= 0 {
 		c.MaxAttempts = 3
-	}
-	if c.History <= 0 {
-		c.History = 8
 	}
 	return c
 }
@@ -103,7 +99,6 @@ type Snapshot struct {
 	FrameW, FrameH int                     // stream frame size
 	Rect           *preprocess.RotatedRect // detected component, frame coordinates
 	Current        *Reading                // reading of the component in view (may be partial)
-	History        []*Reading              // finished readings, newest first
 	Err            string                  // camera or recognition problem
 }
 
@@ -153,23 +148,21 @@ func New(cfg Config, source Source, capture Capture, recognize Recognize) *Track
 func (t *Tracker) Snapshot() Snapshot {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	s := t.snap
-	s.History = append([]*Reading(nil), s.History...)
-	return s
+	return t.snap
 }
 
-// Image returns a PNG of a reading still in the snapshot ("crop" or "ocr").
+// Image returns a PNG of the current reading ("crop" or "ocr"), or nil if
+// id is not the current reading.
 func (t *Tracker) Image(id int, kind string) []byte {
-	s := t.Snapshot()
-	for _, r := range append([]*Reading{s.Current}, s.History...) {
-		if r != nil && r.ID == id {
-			if kind == "crop" {
-				return r.CropPNG
-			}
-			return r.OCRPNG
-		}
+	r := t.Snapshot().Current
+	switch {
+	case r == nil || r.ID != id:
+		return nil
+	case kind == "crop":
+		return r.CropPNG
+	default:
+		return r.OCRPNG
 	}
-	return nil
 }
 
 type attempt struct {
@@ -223,7 +216,7 @@ func (t *Tracker) detect() {
 	if err != nil {
 		t.misses++
 		if t.cur != nil && t.misses >= t.cfg.MissFrames {
-			t.retire() // removed
+			t.cur = nil // removed
 		}
 		return
 	}
@@ -234,7 +227,6 @@ func (t *Tracker) detect() {
 		return
 	}
 	// New, moved or replaced component: start over.
-	t.retire()
 	t.nextID++
 	t.cur = &component{id: t.nextID, rect: seg.Rect, stable: 1}
 }
@@ -253,22 +245,6 @@ func moved(a, b preprocess.RotatedRect, frame image.Rectangle) bool {
 		turn = 0
 	}
 	return shift > 0.03*diag || size > 0.15 || turn > 8*math.Pi/180
-}
-
-// retire moves the current component's reading to the history.
-func (t *Tracker) retire() {
-	if t.cur == nil {
-		return
-	}
-	if r := t.cur.reading; r != nil {
-		t.mu.Lock()
-		t.snap.History = append([]*Reading{r}, t.snap.History...)
-		if len(t.snap.History) > t.cfg.History {
-			t.snap.History = t.snap.History[:t.cfg.History]
-		}
-		t.mu.Unlock()
-	}
-	t.cur = nil
 }
 
 // runAttempt captures an image and recognises it (in its own goroutine).

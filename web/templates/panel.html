@@ -11,16 +11,6 @@
   <p class="status {{.Status}}">{{label .Status}}</p>
   {{with .Current}}{{template "reading" .}}{{end}}
   {{with .Err}}<p class="error">{{.}}</p>{{end}}
-  {{if .History}}
-  <h2>Previous components</h2>
-  <ol>
-    {{range .History}}
-    <li class="{{if .Reliable}}reliable{{else}}unreliable{{end}}" title="confidence {{printf "%.0f" .Confidence}}">
-      {{if .Text}}{{range $i, $l := .Lines}}{{if $i}} / {{end}}{{$l}}{{end}}{{else}}(no text){{end}}
-    </li>
-    {{end}}
-  </ol>
-  {{end}}
 </section>
 {{end}}
 

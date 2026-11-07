@@ -50,8 +50,7 @@ Open `http://localhost:8090`. The page shows the live camera view with a rectang
 
 Next to the video, top to bottom: the crop of the component turned so its text reads upright, the image the
 text was read from, the recognised text, then the confidence and details (attempts, time, variant,
-rotation). Take the component away and put the next one down; earlier readings are listed under *Previous
-components*.
+rotation). Take the component away and put the next one down; the panel follows the component in view.
 
 How it works:
 - **Live view.** `compweb` reads the camera's `/stream.mjpeg` once and relays the frames unchanged to every
