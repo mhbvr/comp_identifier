@@ -8,6 +8,11 @@
 //
 // Identification with the Claude API is optional and runs only when the
 // user asks for it (button or the "i" key) for the reading on screen.
+//
+// With a component database (package inventory), the panel also looks the
+// reading up among the known components and offers to add the part as an
+// item (button or the "a" key); the /inventory pages browse and edit the
+// database (inventory.go).
 package web
 
 import (
@@ -27,6 +32,7 @@ import (
 
 	"github.com/mhbvr/comp_identifier/camera"
 	"github.com/mhbvr/comp_identifier/claude"
+	"github.com/mhbvr/comp_identifier/inventory"
 	"github.com/mhbvr/comp_identifier/preprocess"
 	"github.com/mhbvr/comp_identifier/tracker"
 )
@@ -50,10 +56,30 @@ type Server struct {
 	tracker *tracker.Tracker
 	frames  *camera.Latest
 	claude  *claude.Identifier // nil: Claude identification disabled
+	inv     *inventory.DB      // nil: no component database
 	mux     *http.ServeMux
 
-	mu  sync.Mutex
-	ask ask // the latest Claude request
+	mu    sync.Mutex
+	ask   ask        // the latest Claude request
+	added added      // the latest item added from the camera
+	match matchCache // the latest database lookup
+}
+
+// added is an item added to the database from one reading.
+type added struct {
+	id   int // tracker.Reading.ID
+	item *inventory.Item
+	err  error
+}
+
+// matchCache keeps the latest lookup: the panel is rendered several times
+// a second for a reading that rarely changes.
+type matchCache struct {
+	text    string
+	claude  *claude.Identification
+	gen     uint64
+	matches []inventory.Match
+	err     error
 }
 
 // ask is a Claude identification of one reading.
@@ -74,20 +100,42 @@ type ClaudeView struct {
 	Err      error
 }
 
+// InventoryView is what the page shows about the component database for
+// the current reading.
+type InventoryView struct {
+	ID       int  // reading the buttons add
+	Ready    bool // recognition finished: the reading can be added
+	ByClaude bool // the lookup used Claude's answer instead of the local reading
+	// Matches are the known components the reading belongs to, best first.
+	Matches []inventory.Match
+	// New is Claude's part, offered as a new component when no match has
+	// its name.
+	New   *claude.Identification
+	Added *inventory.Item // the item added from this reading
+	Err   error
+}
+
 // view is the data of the page templates.
 type view struct {
 	tracker.Snapshot
-	Claude *ClaudeView // nil when disabled or there is no reading
+	Claude       *ClaudeView    // nil when disabled or there is no reading
+	Inventory    *InventoryView // nil without a database or a reading
+	HasInventory bool           // for the navigation links
 }
 
-// New returns the app's HTTP handler. id may be nil to disable Claude.
-func New(t *tracker.Tracker, frames *camera.Latest, id *claude.Identifier) *Server {
-	s := &Server{tracker: t, frames: frames, claude: id, mux: http.NewServeMux()}
+// New returns the app's HTTP handler. id may be nil to disable Claude, inv
+// nil to run without a component database.
+func New(t *tracker.Tracker, frames *camera.Latest, id *claude.Identifier, inv *inventory.DB) *Server {
+	s := &Server{tracker: t, frames: frames, claude: id, inv: inv, mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /{$}", s.page("index.html"))
 	s.mux.HandleFunc("GET /panel", s.page("panel"))
 	s.mux.HandleFunc("GET /live.mjpeg", s.live)
 	s.mux.HandleFunc("GET /img/{id}/{kind}", s.image)
 	s.mux.HandleFunc("POST /claude/{id}", s.identify)
+	if inv != nil {
+		s.mux.HandleFunc("POST /add/{id}", s.addItem)
+		s.inventoryRoutes()
+	}
 	return s
 }
 
@@ -105,21 +153,163 @@ func (s *Server) page(name string) http.HandlerFunc {
 }
 
 func (s *Server) view() view {
-	v := view{Snapshot: s.tracker.Snapshot()}
+	v := view{Snapshot: s.tracker.Snapshot(), HasInventory: s.inv != nil}
 	r := v.Current
-	if s.claude == nil || r == nil {
+	if r == nil {
 		return v
 	}
-	v.Claude = &ClaudeView{ID: r.ID, Model: s.claude.Model()}
-	if cfg, err := png.DecodeConfig(bytes.NewReader(r.CropPNG)); err == nil {
-		v.Claude.Estimate = claude.EstimateTokens(cfg.Width, cfg.Height)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var ask ask
+	if s.ask.id == r.ID {
+		ask = s.ask
+	}
+	if s.claude != nil {
+		v.Claude = &ClaudeView{ID: r.ID, Model: s.claude.Model(), Busy: ask.busy, Result: ask.res, Err: ask.err}
+		if cfg, err := png.DecodeConfig(bytes.NewReader(r.CropPNG)); err == nil {
+			v.Claude.Estimate = claude.EstimateTokens(cfg.Width, cfg.Height)
+		}
+	}
+	if s.inv != nil {
+		v.Inventory = s.inventoryView(v.Snapshot, ask.res)
+	}
+	return v
+}
+
+// inventoryView looks the current reading up in the database: Claude's
+// answer if there is one (its part number, then its reading of the
+// marking), else the local reading. s.mu is held.
+func (s *Server) inventoryView(snap tracker.Snapshot, res *claude.Identification) *InventoryView {
+	r := snap.Current
+	iv := &InventoryView{ID: r.ID, Ready: snap.Status != tracker.Working, ByClaude: res != nil}
+	if s.added.id == r.ID {
+		iv.Added, iv.Err = s.added.item, s.added.err
+	}
+	c := &s.match
+	if gen := s.inv.Generation(); c.text != r.Text || c.claude != res || c.gen != gen || c.matches == nil && c.err == nil {
+		*c = matchCache{text: r.Text, claude: res, gen: gen}
+		c.matches, c.err = s.lookup(r.Text, res)
+		if c.matches == nil {
+			c.matches = []inventory.Match{} // cached "no match"
+		}
+	}
+	iv.Matches = c.matches
+	if iv.Err == nil {
+		iv.Err = c.err
+	}
+	if res != nil && strings.TrimSpace(res.PartNumber) != "" {
+		iv.New = res
+		for _, m := range iv.Matches {
+			if strings.EqualFold(m.Name, strings.TrimSpace(res.PartNumber)) {
+				iv.New = nil
+			}
+		}
+	}
+	return iv
+}
+
+func (s *Server) lookup(text string, res *claude.Identification) ([]inventory.Match, error) {
+	if res == nil {
+		return s.inv.Match(text)
+	}
+	var out []inventory.Match
+	seen := map[int64]bool{}
+	if c, err := s.inv.ComponentByName(res.PartNumber); err == nil {
+		out = append(out, inventory.Match{Component: *c, By: "part number", Key: c.Name})
+		seen[c.ID] = true
+	} else if err != inventory.ErrNotFound {
+		return nil, err
+	}
+	ms, err := s.inv.Match(strings.ReplaceAll(res.Marking, " / ", "\n"))
+	for _, m := range ms {
+		if !seen[m.ID] {
+			out = append(out, m)
+		}
+	}
+	return out, err
+}
+
+// addItem adds the current reading to the database as an item (POST
+// /add/{id}): of the known component given by the form value "component",
+// or, with "component=new", of a new component made from Claude's answer.
+// The item's photo is the upright crop; its marking is Claude's reading if
+// Claude was asked, else the local one. Each reading is added at most once.
+func (s *Server) addItem(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.Atoi(r.PathValue("id"))
+	snap := s.tracker.Snapshot()
+	cur := snap.Current
+	switch {
+	case cur == nil || cur.ID != id:
+		http.Error(w, "that component is no longer in view", http.StatusConflict)
+		return
+	case snap.Status == tracker.Working:
+		http.Error(w, "still recognising", http.StatusConflict)
+		return
 	}
 	s.mu.Lock()
-	if s.ask.id == r.ID {
-		v.Claude.Busy, v.Claude.Result, v.Claude.Err = s.ask.busy, s.ask.res, s.ask.err
+	defer s.mu.Unlock()
+	if s.added.id == id && s.added.item != nil {
+		w.WriteHeader(http.StatusNoContent) // already added
+		return
 	}
-	s.mu.Unlock()
-	return v
+	var res *claude.Identification
+	if s.ask.id == id {
+		res = s.ask.res
+	}
+	var comp inventory.Component
+	if v := r.FormValue("component"); v == "new" {
+		if res == nil {
+			http.Error(w, "no identification by Claude to add", http.StatusConflict)
+			return
+		}
+		comp = inventory.Component{Name: res.PartNumber, Description: describe(res)}
+	} else if comp.ID, _ = strconv.ParseInt(v, 10, 64); comp.ID == 0 {
+		http.Error(w, "no component given", http.StatusBadRequest)
+		return
+	}
+	text := cur.Text
+	if res != nil && res.Marking != "" {
+		text = res.Marking
+	}
+	img, err := png.Decode(bytes.NewReader(cur.CropPNG))
+	if err != nil {
+		img = nil
+	}
+	item, created, err := s.inv.AddItem(comp, text, img)
+	s.added = added{id: id, item: item, err: err}
+	if err != nil {
+		log.Printf("inventory: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	log.Printf("inventory: item %d of %s (component %d, new %v)", item.ID, item.ComponentName, item.ComponentID, created)
+	if created && res.DatasheetURL != "" {
+		go s.fetchDatasheet(item.ComponentID, res.DatasheetURL)
+	}
+	w.WriteHeader(http.StatusCreated)
+}
+
+// fetchDatasheet downloads a new component's datasheet from the URL Claude
+// gave. The URL is unchecked: failures are only logged, and the datasheet
+// can be uploaded on the inventory page instead.
+func (s *Server) fetchDatasheet(id int64, url string) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := s.inv.FetchDatasheet(ctx, id, url); err != nil {
+		log.Printf("inventory: component %d: %v", id, err)
+	}
+}
+
+// describe is a component description made from Claude's answer.
+func describe(res *claude.Identification) string {
+	d := strings.TrimSpace(res.Description)
+	if m := strings.TrimSpace(res.Manufacturer); m != "" {
+		if d == "" {
+			return m
+		}
+		d += " (" + m + ")"
+	}
+	return d
 }
 
 // identify sends the current reading to Claude (POST /claude/{id}). Each

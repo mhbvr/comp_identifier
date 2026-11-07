@@ -1,0 +1,33 @@
+{{template "head" "Items · Component identifier"}}
+{{template "inventory-style"}}
+</head>
+<body>
+{{template "nav" "items"}}
+<main>
+  <form class="search" method="get" action="/inventory/items">
+    <input type="search" name="q" value="{{.Query}}" placeholder="Search marking or component name" autofocus>
+    <button>Search</button>
+    {{if .Query}}<a href="/inventory/items">show all</a>{{end}}
+  </form>
+  {{with .Err}}<p class="error">{{.}}</p>{{end}}
+  <p class="meta">{{len .Items}} item{{if ne (len .Items) 1}}s{{end}}{{if .Query}} matching “{{.Query}}”{{end}}, newest first</p>
+  {{if .Items}}
+  <table>
+    <thead><tr><th></th><th>#</th><th>Component</th><th>Marking</th></tr></thead>
+    <tbody>
+    {{range .Items}}
+    <tr>
+      <td>{{if .Photo}}<a href="/db/photos/{{.Photo}}" target="_blank">{{template "thumb" .Photo}}</a>{{else}}{{template "thumb" ""}}{{end}}</td>
+      <td class="num">{{.ID}}</td>
+      <td class="name"><a href="/inventory/components/{{.ComponentID}}#item{{.ID}}">{{.ComponentName}}</a></td>
+      <td class="mono">{{.Marking}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="empty">{{if .Query}}Nothing found.{{else}}No items yet.{{end}}</p>
+  {{end}}
+</main>
+</body>
+</html>

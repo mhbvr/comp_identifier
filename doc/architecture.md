@@ -1,7 +1,8 @@
 # Architecture
 
 comp_identifier reads the marking on an electronic component lying on a white background and, on
-request, asks the Claude API what the part is. It runs as a web app next to a camera
+request, asks the Claude API what the part is; the web app keeps a database of known components
+and the parts in stock. It runs as a web app next to a camera
 ([camera_rpi](https://github.com/mhbvr/camera_rpi)) or as a command-line tool over photos.
 
 ## Packages
@@ -11,6 +12,7 @@ cmd/compweb ──► camera ──────────────► camer
      │      ──► tracker ──► marking ──► preprocess   (find, align, crop: pure Go)
      │                         └──────► ocr          (PaddleOCR models on ONNX Runtime)
      │      ──► web ───────► claude ──► Claude API   (on request only)
+     │               └─────► inventory ─► SQLite + photo/datasheet files
 cmd/compid ───────────────► marking
 cmd/photocam                 (fake camera for development)
 ```
@@ -22,7 +24,8 @@ cmd/photocam                 (fake camera for development)
 | `marking` | crop → OCR at 0/90/180/270° → best reading, confidence, "reliable" flag | — |
 | `camera` | read-only client for camera_rpi: MJPEG stream reader, `POST /api/capture`, latest-frame hub | — |
 | `tracker` | watches stream frames: component placed / moved / removed; runs recognition on captures | — |
-| `web` | HTTP server: `html/template` pages, MJPEG relay, result images, Claude button | — |
+| `web` | HTTP server: `html/template` pages, MJPEG relay, result images, Claude and Add buttons, inventory pages | — |
+| `inventory` | component database: components, items, photos, datasheets; marking lookup | SQLite via [`mattn/go-sqlite3`](https://github.com/mattn/go-sqlite3) (cgo) |
 | `claude` | on-demand identification with the Claude API (small, schema-constrained request) | [Anthropic Go SDK](https://github.com/anthropics/anthropic-sdk-go) |
 | `cmd/compweb` | the web app | — |
 | `cmd/compid` | CLI: read photos, dump debug images, evaluate against labelled photos | — |
@@ -62,6 +65,9 @@ camera_rpi /stream.mjpeg ─► camera.Feed ─► camera.Latest ─┬─► we
 camera_rpi /api/capture ◄─ tracker (component still) ─► marking.Reader ─► Reading (text, PNGs)
 browser ◄─ web /panel (every 300 ms: SVG rectangle + result panel) ◄─ tracker.Snapshot
 browser ─► web POST /claude/{id} ─► claude.Identify ─► Claude API
+web /panel ─► inventory.Match (reading text, or Claude's answer) ─► known components
+browser ─► web POST /add/{id} ─► inventory.AddItem (crop as photo; new component from Claude's answer)
+browser ─► web /inventory/... (forms) ─► inventory
 ```
 
 - One goroutine keeps the newest stream frame in `camera.Latest`; any number of browsers and the
@@ -72,7 +78,8 @@ browser ─► web POST /claude/{id} ─► claude.Identify ─► Claude API
 
 ## Runtime requirements
 
-- Go 1.25+ to build (the Anthropic SDK needs it), with cgo (the ONNX Runtime binding needs it).
+- Go 1.25+ to build (the Anthropic SDK needs it), with cgo (the ONNX Runtime binding and SQLite
+  need it). SQLite is compiled into the binary.
 - **ONNX Runtime 1.19 or newer**, as a shared library, at run time. The Go binding is pinned to
   `yalue/onnxruntime_go` v1.12.0, which asks for C API version 19; newer binding releases ask for
   the newest API version and refuse older libraries, such as Arch Linux's 1.29. Tested with 1.19.2,
@@ -95,5 +102,7 @@ browser ─► web POST /claude/{id} ─► claude.Identify ─► Claude API
 - Unit tests per package, all without network.
 - `ocr` and `marking` tests that need ONNX Runtime skip themselves when it can't be loaded.
 - `marking/photos_test.go` reads both labelled photo sets and fails below accuracy floors.
+- `inventory` tests use a temporary database directory; `web` tests drive the Add buttons and the
+  inventory forms against one.
 - `camera`, `tracker` and `web` tests use fake HTTP servers, a scripted frame source and a fake
   recogniser; `claude` and `web` tests use a fake Claude API.

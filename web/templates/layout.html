@@ -1,0 +1,39 @@
+{{/* Shared page parts. "head" takes the page title, "nav" the current page. */}}
+
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.}}</title>
+<style>
+  :root { --working: #f39c12; --reliable: #27ae60; --unreliable: #e74c3c; --muted: #777; --line: #ddd; }
+  body { margin: 0; font: 15px/1.4 system-ui, sans-serif; background: #f4f4f4; color: #222; }
+  header { display: flex; flex-wrap: wrap; gap: 1.2rem; align-items: baseline; padding: .6rem 1rem; background: #222; color: #fff; }
+  header strong { font-weight: 600; }
+  header a { color: #bbb; text-decoration: none; }
+  header a:hover, header a.current { color: #fff; }
+  header a.current { border-bottom: 2px solid #fff; }
+  a { color: #1a5fb4; }
+  .meta, .empty { color: var(--muted); font-size: .85rem; margin: .2rem 0; }
+  .error { color: var(--unreliable); font-size: .85rem; }
+  button, input[type=submit] { font: inherit; padding: .4rem .8rem; cursor: pointer; }
+  button.small { padding: .15rem .5rem; font-size: .85rem; }
+  button.danger { color: var(--unreliable); }
+  input[type=text], input[type=search], textarea, select { font: inherit; padding: .3rem .4rem; box-sizing: border-box; }
+  textarea { font-family: ui-monospace, monospace; }
+  .mono { font-family: ui-monospace, monospace; white-space: pre-line; }
+  kbd { font: .8rem ui-monospace, monospace; border: 1px solid #bbb; border-radius: 3px; padding: 0 .25rem; background: #fafafa; }
+</style>
+{{end}}
+
+{{define "nav"}}
+<header>
+  <strong>Component identifier</strong>
+  <a href="/" {{if eq . "camera"}}class="current"{{end}}>Camera</a>
+  <a href="/inventory" {{if eq . "components"}}class="current"{{end}}>Components</a>
+  <a href="/inventory/items" {{if eq . "items"}}class="current"{{end}}>Items</a>
+</header>
+{{end}}
+
+{{define "thumb"}}{{if .}}<img class="thumb" src="/db/photos/{{.}}" alt="item photo" loading="lazy">{{else}}<span class="thumb none"></span>{{end}}{{end}}

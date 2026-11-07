@@ -25,6 +25,24 @@ func TestMatchToken(t *testing.T) {
 	}
 }
 
+func TestEditDistance(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{
+		{"31AE9XM\nTL072IP", "31ae9xm tl072ip", 0},
+		{"TL072IP", "TL074IP", 1},
+		{"TL072IP", "TL072", 2},
+		{"", "LM35", 4},
+		{"LM35", "", 4},
+	}
+	for _, c := range cases {
+		if got := EditDistance(c.a, c.b); got != c.want {
+			t.Errorf("EditDistance(%q, %q) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+}
+
 func TestScorePrefersConfidentLongLines(t *testing.T) {
 	good := []ocr.Line{{Text: "LM35", Confidence: 0.98}, {Text: "DZ", Confidence: 0.95}}
 	noise := []ocr.Line{{Text: "S", Confidence: 0.6}, {Text: "J.", Confidence: 0.55}, {Text: "4A", Confidence: 0.5}}

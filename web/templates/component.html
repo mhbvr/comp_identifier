@@ -1,0 +1,81 @@
+{{template "head" (printf "%s · Component identifier" .C.Name)}}
+{{template "inventory-style"}}
+</head>
+<body>
+{{template "nav" "components"}}
+<main>
+  <p class="meta"><a href="/inventory">← all components</a></p>
+  {{with .Err}}<p class="error">{{.}}</p>{{end}}
+  {{with .C}}
+  <h1>{{.Name}}</h1>
+  {{if .Description}}<p>{{.Description}}</p>{{end}}
+  <p class="row">
+    {{if .Datasheet}}
+    <a href="/db/datasheets/{{.Datasheet}}" target="_blank">datasheet: {{.Datasheet}}</a>
+    <form class="inline" method="post" action="/inventory/components/{{.ID}}/datasheet/delete" onsubmit="return confirm('Delete the datasheet file?')">
+      <button class="small danger">remove</button>
+    </form>
+    {{else}}
+    <span class="meta">no datasheet</span> · <a href="{{searchURL .Name}}" target="_blank" rel="noopener">search datasheet</a>
+    {{end}}
+  </p>
+
+  <section class="card">
+    <h2>Edit</h2>
+    <form method="post" action="/inventory/components/{{.ID}}" enctype="multipart/form-data" class="grid">
+      <label>Name (part number) <input type="text" name="name" value="{{.Name}}" required></label>
+      <label>Description <input type="text" name="description" value="{{.Description}}"></label>
+      <label>{{if .Datasheet}}Replace datasheet{{else}}Datasheet{{end}} <input type="file" name="datasheet"></label>
+      <div class="row">
+        <button>Save</button>
+      </div>
+    </form>
+  </section>
+  {{end}}
+
+  <h2>{{len .Items}} item{{if ne (len .Items) 1}}s{{end}}</h2>
+  <div class="items">
+    {{range .Items}}
+    <div class="item" id="item{{.ID}}">
+      {{if .Photo}}<a href="/db/photos/{{.Photo}}" target="_blank"><img class="photo" src="/db/photos/{{.Photo}}" alt="item {{.ID}}" loading="lazy"></a>{{else}}<div class="nophoto">no photo</div>{{end}}
+      <form method="post" action="/inventory/items/{{.ID}}" enctype="multipart/form-data" class="grid">
+        <label>Marking (item #{{.ID}}) <textarea name="marking" rows="3">{{.Marking}}</textarea></label>
+        <label>Component
+          <select name="component">
+            {{$cur := .ComponentID}}
+            {{range $.All}}<option value="{{.ID}}" {{if eq .ID $cur}}selected{{end}}>{{.Name}}</option>{{end}}
+          </select>
+        </label>
+        <label>Replace photo <input type="file" name="photo" accept="image/jpeg,image/png"></label>
+        <div><button class="small">Save</button></div>
+      </form>
+      <form method="post" action="/inventory/items/{{.ID}}/delete" onsubmit="return confirm('Delete item #{{.ID}} and its photo?')">
+        <button class="small danger">Delete item</button>
+      </form>
+    </div>
+    {{else}}
+    <p class="empty">No items.</p>
+    {{end}}
+  </div>
+
+  {{with .C}}
+  <section class="card">
+    <h2>Add an item by hand</h2>
+    <p class="meta">Usually items are added from the camera page.</p>
+    <form method="post" action="/inventory/components/{{.ID}}/items" enctype="multipart/form-data" class="grid">
+      <label>Marking <textarea name="marking" rows="2"></textarea></label>
+      <label>Photo <input type="file" name="photo" accept="image/jpeg,image/png"></label>
+      <div><button>Add item</button></div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Delete component</h2>
+    <form method="post" action="/inventory/components/{{.ID}}/delete" onsubmit="return confirm('Delete {{.Name}}, its {{.Items}} item(s), their photos and the datasheet?')">
+      <button class="danger">Delete {{.Name}}{{if .Items}} and its {{.Items}} item{{if ne .Items 1}}s{{end}}{{end}}</button>
+    </form>
+  </section>
+  {{end}}
+</main>
+</body>
+</html>

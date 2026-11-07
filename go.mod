@@ -4,6 +4,7 @@ go 1.25
 
 require (
 	github.com/anthropics/anthropic-sdk-go/v2 v2.7.0
+	github.com/mattn/go-sqlite3 v1.14.53
 	github.com/yalue/onnxruntime_go v1.12.0
 )
 
