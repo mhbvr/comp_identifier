@@ -105,7 +105,7 @@ func TestRealPhotos(t *testing.T) {
 		t.Logf("%-24s %-13s d=%-2d %q", items[i].file, items[i].want, d, strings.ReplaceAll(texts[i], "\n", " / "))
 	}
 	t.Logf("exact %d/%d, within one edit %d/%d", exact, len(items), near, len(items))
-	// Measured: 30 exact, 44 within one edit (stock Ubuntu eng model).
+	// Measured: 30 exact, 42 within one edit (stock Ubuntu eng model).
 	if exact < 26 || near < 40 {
 		t.Errorf("accuracy regression: exact %d (want >= 26), near %d (want >= 40)", exact, near)
 	}

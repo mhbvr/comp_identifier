@@ -3,7 +3,9 @@ package preprocess
 import (
 	"image"
 	"image/color"
+	"image/jpeg"
 	"math"
+	"os"
 	"testing"
 )
 
@@ -233,5 +235,32 @@ func TestSegmentVignettedBlank(t *testing.T) {
 	}
 	if _, err := Segment(img, Options{}); err != ErrNoComponent {
 		t.Errorf("err = %v, want ErrNoComponent", err)
+	}
+}
+
+// TestSegmentIgnoresShadow uses a real photo where a strong shadow on the
+// paper touches the chip. The rectangle must follow the chip (tilted about
+// -17°), not the chip and shadow together (which gave 0° and a much wider
+// box).
+func TestSegmentIgnoresShadow(t *testing.T) {
+	f, err := os.Open("testdata/shadow_tlc3702.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := jpeg.Decode(f)
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seg, err := Segment(img, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := seg.Rect
+	if deg := r.Angle * 180 / math.Pi; deg > -14 || deg < -21 {
+		t.Errorf("angle = %.1f°, want about -17°", deg)
+	}
+	if r.W > 360 || r.Center.X < 360 {
+		t.Errorf("rectangle %+v still includes the shadow on the left", r)
 	}
 }

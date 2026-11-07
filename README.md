@@ -160,9 +160,12 @@ several cores, run several `Reader`s in parallel, as `compid` does.
    coloured packages stand out but shiny leads do not. The local white level is estimated with a large max
    filter plus a blur, which cancels vignetting and colour casts. The steps after that:
    - Otsu threshold, closing, then the largest blob with its holes filled.
+   - A strong shadow can pass that threshold and merge with the body. It is lighter than the package, so the
+     blob is split once more by Otsu over its own pixels, and the dark core is kept when it still covers at
+     least 60% of the blob.
    - An opening sized to the blob removes leads, including tarnished dark ones.
    - The minimum-area rotated rectangle of the convex hull gives the body (rotating calipers).
-2. **Rotate + crop** (`warp.go`). The rectangle plus a small margin is resampled (bilinear) into an
+2. **Rotate + crop** (`warp.go`). The rectangle plus a 10% margin is resampled (bilinear) into an
    axis-aligned image, long side horizontal, 360 px tall.
 3. **Enhance** (`enhance.go`, `textmask.go`):
    - *Body mask* inside the crop. An opening removes leads, and the rim is eroded away so package edges
@@ -195,7 +198,7 @@ components: DIP, SOIC, TO-92, TO-220).
 | | photos |
 |---|---|
 | part number read exactly | 30 / 77 (39 %) |
-| within one character edit | 44 / 77 (57 %) |
+| within one character edit | 42 / 77 (55 %) |
 | time | ~0.9 s per photo per core |
 
 `go test ./...` runs this as a regression test (`marking/photos_test.go`). Use `-short` to skip it.
