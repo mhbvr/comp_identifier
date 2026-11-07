@@ -7,6 +7,9 @@
 // detected component (orange while recognising, green for a confident
 // reading, red for a doubtful one), next to the recognised text and the
 // images it was read from.
+//
+// With -db DIR (default "compdb"), parts are looked up in a component
+// database and can be added to it; /inventory browses and edits it.
 package main
 
 import (
@@ -22,6 +25,7 @@ import (
 
 	"github.com/mhbvr/comp_identifier/camera"
 	"github.com/mhbvr/comp_identifier/claude"
+	"github.com/mhbvr/comp_identifier/inventory"
 	"github.com/mhbvr/comp_identifier/marking"
 	"github.com/mhbvr/comp_identifier/ocr"
 	"github.com/mhbvr/comp_identifier/tracker"
@@ -36,7 +40,17 @@ func main() {
 	onnxLib := flag.String("onnxruntime", "", "ONNX Runtime shared library (default: $ONNXRUNTIME_LIB, else libonnxruntime.so)")
 	useClaude := flag.Bool("claude", true, "offer identification with the Claude API (needs ANTHROPIC_API_KEY or 'ant auth login')")
 	claudeModel := flag.String("claude-model", claude.DefaultModel, "Claude model for identification")
+	dbDir := flag.String("db", "compdb", "component database directory, created if missing (\"\": none)")
 	flag.Parse()
+
+	var inv *inventory.DB
+	if *dbDir != "" {
+		var err error
+		if inv, err = inventory.Open(*dbDir); err != nil {
+			log.Fatal(err)
+		}
+		defer inv.Close()
+	}
 
 	cam := camera.New(*camURL)
 	if *camCA != "" {
@@ -74,12 +88,12 @@ func main() {
 	if *useClaude {
 		identifier = claude.New(*claudeModel)
 	}
-	srv := &http.Server{Addr: *listen, Handler: web.New(t, frames, identifier)}
+	srv := &http.Server{Addr: *listen, Handler: web.New(t, frames, identifier, inv)}
 	go func() {
 		<-ctx.Done()
 		srv.Close()
 	}()
-	log.Printf("camera %s, serving on %s", *camURL, *listen)
+	log.Printf("camera %s, database %q, serving on %s", *camURL, *dbDir, *listen)
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatal(err)
 	}

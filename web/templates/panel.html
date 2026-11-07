@@ -10,6 +10,7 @@
 <section id="result">
   <p class="status {{.Status}}">{{label .Status}}</p>
   {{with .Current}}{{template "reading" .}}{{end}}
+  {{with .Inventory}}{{template "inventory" .}}{{end}}
   {{with .Claude}}{{template "claude" .}}{{end}}
   {{with .Err}}<p class="error">{{.}}</p>{{end}}
 </section>
@@ -51,5 +52,44 @@
   <p class="meta">key <kbd>i</kbd> · about {{.Estimate}} input tokens · {{.Model}}</p>
   {{with .Err}}<p class="error">{{.}}</p>{{end}}
   {{end}}
+</div>
+{{end}}
+
+{{define "inventory"}}
+<div class="inventory">
+  {{with .Added}}
+  <p class="added">Added item #{{.ID}} of <a href="/inventory/components/{{.ComponentID}}">{{.ComponentName}}</a></p>
+  {{else}}
+  {{if .Matches}}{{with index .Matches 0}}
+  <div class="known">
+    {{with .Photo}}{{template "thumb" .}}{{end}}
+    <div>
+      <h2><a href="/inventory/components/{{.ID}}" target="_blank">{{.Name}}</a></h2>
+      {{if .Description}}<p>{{.Description}}</p>{{end}}
+      {{if .Datasheet}}<p><a href="/db/datasheets/{{.Datasheet}}" target="_blank">datasheet</a></p>{{end}}
+    </div>
+  </div>
+  <p class="meta">
+    known component · {{.Items}} item{{if ne .Items 1}}s{{end}} in stock ·
+    found by {{.By}} <span class="mono">{{.Key}}</span>{{if not .Exact}} ({{.Distance}} edit{{if gt .Distance 1}}s{{end}}){{end}}
+    {{if $.ByClaude}}in Claude's answer{{end}}
+  </p>
+  <button class="add" data-id="{{$.ID}}" data-component="{{.ID}}" onclick="addItem(this)" {{if not $.Ready}}disabled{{end}}>Add item of {{.Name}}</button>
+  <span class="meta hint">key <kbd>a</kbd></span>
+  {{end}}
+  {{if gt (len .Matches) 1}}<p class="others meta">or add to:
+    {{range slice .Matches 1}}<button class="add small" data-id="{{$.ID}}" data-component="{{.ID}}" onclick="addItem(this)" {{if not $.Ready}}disabled{{end}}>{{.Name}}</button> {{end}}
+  </p>{{end}}
+  {{else if not .New}}
+  <p class="empty">Not in the database. Move the part to read it again{{if not .ByClaude}}, or identify it with Claude{{end}}.</p>
+  {{end}}
+  {{with .New}}
+  <p class="{{if $.Matches}}others {{end}}meta">{{if $.Matches}}Claude says {{.PartNumber}}, which is not in the database:{{else}}New component:{{end}}</p>
+  <button class="add" data-id="{{$.ID}}" data-component="new" onclick="addItem(this)" {{if not $.Ready}}disabled{{end}}>Add new component {{.PartNumber}} with this item</button>
+  {{if not $.Matches}}<span class="meta hint">key <kbd>a</kbd></span>{{end}}
+  {{end}}
+  {{if not .Ready}}<p class="meta">Wait for recognition to finish to add the part.</p>{{end}}
+  {{end}}
+  {{with .Err}}<p class="error">{{.}}</p>{{end}}
 </div>
 {{end}}

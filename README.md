@@ -4,9 +4,9 @@ Identify electronic components (ICs, MOSFETs, BJTs, regulators, …) from photos
 
 It reads the **marking text** on a component lying on a white background, either live under a
 camera in a web app (`compweb`) or from photos (`compid`). Recognition runs locally, with PaddleOCR
-models on ONNX Runtime. There is no component database yet: the result is the text on the part.
-On request, the web app also asks the Claude API to identify the part: canonical part number,
-manufacturer, description and datasheet link.
+models on ONNX Runtime. The web app looks the text up in a local **component database** and adds
+parts to it as you put them under the camera. On request, it also asks the Claude API to identify
+the part: canonical part number, manufacturer, description and datasheet link.
 
 ```
 photo ─► find + align component ─► crop ─► text detection + recognition × 4 rotations ─► best text
@@ -72,6 +72,29 @@ Next to the video, top to bottom:
 - confidence, attempts, time and rotation.
 
 Take the component away and put the next one down. Camera settings are never changed.
+
+**Component database (inventory):** `-db DIR` (default `compdb`, created if missing; `-db ""`
+turns it off). A *component* is a part model (name = part number, description, datasheet); an
+*item* is one physical part (its marking and cropped photo). The directory holds:
+
+```
+compdb/inventory.db    SQLite: components(id, name, description, datasheet)
+                               items(id, component_id, marking, photo)
+compdb/photos/         item<ID>.jpg, the upright crop of each item
+compdb/datasheets/     datasheets (file names in components.datasheet)
+```
+
+- When a part is recognised, its text is looked up among the component names and the markings of
+  stored items (an OCR error per 6 letters is forgiven). A known component is shown with its
+  description, datasheet and stock, and **Add item** (or the **a** key) stores the part as a new
+  item of it, with its photo.
+- An unknown part can only be added after Claude has identified it (or after moving the part to
+  get a better reading): **Add new component** creates the component from Claude's answer, and
+  downloads the datasheet if Claude gave a URL that serves a PDF. Claude can be asked for a known
+  part too, when the local reading is wrong; the lookup then uses Claude's answer.
+- **Components** and **Items** (links at the top, `/inventory`) browse, search and edit the
+  database: rename components, upload datasheets, fix markings, move items to another component,
+  add items by hand, delete.
 
 **Identify with Claude:** press the button or the **i** key. It costs about 600 input tokens per
 part; nothing is sent without your request. Credentials come from `ANTHROPIC_API_KEY` or `ant auth

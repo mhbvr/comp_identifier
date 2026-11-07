@@ -131,6 +131,38 @@ removed (3 empty detections) ──► Empty
   which model answered and the tokens used.
 - **Model.** The default is `claude-opus-5-5`; `-claude-model` changes it.
 
+## Component database (`inventory`)
+
+- **Layout.** A directory with `inventory.db` (SQLite), `photos/` and `datasheets/`; the tables store
+  file names, not paths, so the directory can be moved or copied as a whole.
+  - `components(id, name UNIQUE COLLATE NOCASE, description, datasheet)`: a part model. The name is
+    the part number and identifies the component regardless of case.
+  - `items(id, component_id → components, marking, photo)`: one physical part. The marking is stored
+    one line per text line; the photo is the upright crop as JPEG (`item<ID>.jpg`).
+- **Lookup** of a reading (`Match`), forgiving one OCR edit per 6 letters (none under 6 letters,
+  where one edit turns one part number into another), against:
+  - component names, as a substring of the reading (part numbers are printed on the part);
+  - item markings, whole (the same batch reads the same);
+  - item marking lines of 6+ letters, as a substring (the printed part number when the component's
+    name is a canonical one that isn't printed, such as LM35DZ/NOPB).
+
+  The best match has the fewest edits, then the longest matched text (TLC555IP before TLC555). The
+  other matches are offered as alternatives. A lookup scans all names and markings, which is
+  instant for a hobby inventory; the panel caches it per reading and database change.
+- **With Claude's answer**, the lookup uses it instead of the local reading: exact part number
+  first, then Claude's reading of the marking. If no match has Claude's part number, the panel
+  offers to add it as a new component (description `description (manufacturer)`).
+- **Adding** happens only when recognition has finished, once per reading. The item's marking is
+  Claude's reading when Claude was asked (it reads better), else the local one. A new component and
+  its first item are created in one transaction. If Claude gave a datasheet URL, it is downloaded
+  in the background and kept only if it is a PDF; the URL comes from Claude's knowledge and is often
+  wrong, so failures are only logged and the datasheet can be uploaded on the component's page.
+- **No new component without Claude** on the camera page: an unknown part is either read again
+  (move it) or identified by Claude, so names stay canonical part numbers rather than OCR guesses.
+  The inventory pages can still add and edit anything by hand.
+- **Inventory pages** are plain server-rendered HTML forms (POST, then redirect), with no
+  JavaScript besides delete confirmations.
+
 ## Removed along the way
 
 - **Tesseract** (libtesseract via cgo, or the CLI) and everything built around it:

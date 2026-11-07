@@ -34,7 +34,7 @@ func newServer(t *testing.T) (*httptest.Server, *camera.Latest) {
 	}
 	never := func(image.Image) (*marking.Result, error) { panic("not called") }
 	tr := tracker.New(tracker.Config{}, source, nil, never)
-	srv := httptest.NewServer(New(tr, frames, nil))
+	srv := httptest.NewServer(New(tr, frames, nil, nil))
 	t.Cleanup(srv.Close)
 	return srv, frames
 }
@@ -129,7 +129,7 @@ func TestClaudeIdentify(t *testing.T) {
 	go tr.Run(ctx)
 
 	id := claude.New("", option.WithBaseURL(api.URL), option.WithAPIKey("test"))
-	srv := httptest.NewServer(New(tr, &camera.Latest{}, id))
+	srv := httptest.NewServer(New(tr, &camera.Latest{}, id, nil))
 	defer srv.Close()
 
 	// The 400x300 crop is sent as is: 160 image tokens + the prompt.
