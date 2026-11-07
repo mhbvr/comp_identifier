@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,6 +27,28 @@ func scene(component bool, x int) []byte {
 			c := color.RGBA{240, 242, 242, 255}
 			if component && i >= x && i < x+80 && y >= 90 && y < 135 {
 				c = color.RGBA{35, 35, 38, 255}
+			}
+			img.SetRGBA(i, y, c)
+		}
+	}
+	var b bytes.Buffer
+	jpeg.Encode(&b, img, nil)
+	return b.Bytes()
+}
+
+// sceneWithShadow is scene(true, x) where a dark shadow below the body
+// merges with it, as when the light changes: the outline becomes nearly
+// square and its centre shifts.
+func sceneWithShadow(x int) []byte {
+	img := image.NewRGBA(image.Rect(0, 0, 320, 240))
+	for y := 0; y < 240; y++ {
+		for i := 0; i < 320; i++ {
+			c := color.RGBA{240, 242, 242, 255}
+			switch {
+			case i >= x && i < x+80 && y >= 90 && y < 135:
+				c = color.RGBA{35, 35, 38, 255}
+			case i >= x && i < x+80 && y >= 135 && y < 170:
+				c = color.RGBA{60, 60, 64, 255}
 			}
 			img.SetRGBA(i, y, c)
 		}
@@ -154,21 +177,50 @@ func TestMovedComponentIsRecognisedAgain(t *testing.T) {
 	}
 }
 
-func TestMoved(t *testing.T) {
-	frame := image.Rect(0, 0, 1000, 750)
-	a := preprocess.RotatedRect{Center: preprocess.Point{X: 500, Y: 400}, W: 200, H: 100}
-	b := a
-	b.Center.X += 10 // jitter
-	if moved(a, b, frame) {
-		t.Error("10 px jitter counted as a move")
+// TestFlickeringOutlineIsNotANewComponent: lighting makes the outline
+// alternate between the body and body plus shadow; the component has not
+// moved and must be recognised once.
+func TestFlickeringOutlineIsNotANewComponent(t *testing.T) {
+	rec := &fakeRecognizer{readings: []*marking.Result{reading("LM35", 5, true)}}
+	tr, cam := start(t, rec)
+	cam.show(scene(true, 100))
+	first := waitFor(t, tr, "reliable", func(s Snapshot) bool { return s.Status == Reliable })
+	for i := 0; i < 20; i++ {
+		if i%2 == 0 {
+			cam.show(sceneWithShadow(100))
+		} else {
+			cam.show(scene(true, 100))
+		}
+		time.Sleep(15 * time.Millisecond)
 	}
-	b.Center.X += 60
-	if !moved(a, b, frame) {
-		t.Error("70 px shift not counted as a move")
+	s := tr.Snapshot()
+	if n := rec.calls.Load(); n != 1 || s.Current == nil || s.Current.ID != first.Current.ID {
+		t.Errorf("recognised %d times, current %+v; want once, same component", n, s.Current)
 	}
-	c := a
-	c.Angle = 0.3
-	if !moved(a, c, frame) {
-		t.Error("17° turn not counted as a move")
+}
+
+func TestSamePlace(t *testing.T) {
+	body := preprocess.RotatedRect{Center: preprocess.Point{X: 500, Y: 400}, W: 390, H: 280}
+	// Lighting adds the shadow: bigger, nearly square, so width and height
+	// swap (seen as a 90° turn) and the centre shifts by 80 px.
+	withShadow := preprocess.RotatedRect{Center: preprocess.Point{X: 560, Y: 455}, W: 450, H: 400, Angle: math.Pi / 2}
+	if !samePlace(body, withShadow) || !samePlace(withShadow, body) {
+		t.Error("body with and without shadow counted as different places")
+	}
+	jitter := body
+	jitter.Center.X += 15
+	jitter.Angle = 0.05
+	if !samePlace(body, jitter) {
+		t.Error("small jitter counted as a move")
+	}
+	moved := body
+	moved.Center.X += 300 // more than half its width away
+	if samePlace(body, moved) {
+		t.Error("component moved by most of its width counted as the same place")
+	}
+	elsewhere := body
+	elsewhere.Center = preprocess.Point{X: 1200, Y: 900}
+	if samePlace(body, elsewhere) {
+		t.Error("component elsewhere counted as the same place")
 	}
 }
