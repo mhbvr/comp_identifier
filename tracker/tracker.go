@@ -6,7 +6,7 @@
 //	nothing detected ──place──► Working (orange) ──recognised──► Reliable (green)
 //	                                 ▲      │                    or Unreliable (red)
 //	                                 │      └─ up to MaxAttempts captures
-//	         moved / replaced ───────┘
+//	         moved / replaced ───────┘   (MoveFrames detections elsewhere)
 //	removed (MissFrames detections without it) ──► Empty
 //
 // Detection is cheap (segmentation of a downscaled stream frame) and runs
@@ -47,6 +47,7 @@ type Config struct {
 	DetectEvery  time.Duration // detection period; default 200 ms
 	StableFrames int           // still detections before recognising; default 3
 	MissFrames   int           // empty detections before "removed"; default 3
+	MoveFrames   int           // consecutive detections elsewhere before "moved"; default 2
 	MaxAttempts  int           // recognition attempts per component; default 3
 	Detect       preprocess.Options
 }
@@ -60,6 +61,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.MissFrames <= 0 {
 		c.MissFrames = 3
+	}
+	if c.MoveFrames <= 0 {
+		c.MoveFrames = 2
 	}
 	if c.MaxAttempts <= 0 {
 		c.MaxAttempts = 3
@@ -124,8 +128,10 @@ type Tracker struct {
 // component is the one currently in view.
 type component struct {
 	id       int
-	rect     preprocess.RotatedRect
-	stable   int
+	anchor   preprocess.RotatedRect // where it was first detected
+	rect     preprocess.RotatedRect // latest detection, for display
+	stable   int                    // detections at the anchor
+	away     int                    // consecutive detections elsewhere
 	attempts int
 	best     *marking.Result
 	reading  *Reading
@@ -220,30 +226,51 @@ func (t *Tracker) detect() {
 		return
 	}
 	t.misses = 0
-	if t.cur != nil && !moved(t.cur.rect, seg.Rect, img.Bounds()) {
-		t.cur.rect = seg.Rect
-		t.cur.stable++
-		return
+	if c := t.cur; c != nil {
+		if samePlace(c.anchor, seg.Rect) {
+			c.rect, c.away = seg.Rect, 0
+			c.stable++
+			return
+		}
+		// A single odd detection (glare, a hand passing) is ignored.
+		if c.away++; c.away < t.cfg.MoveFrames {
+			return
+		}
 	}
 	// New, moved or replaced component: start over.
 	t.nextID++
-	t.cur = &component{id: t.nextID, rect: seg.Rect, stable: 1}
+	t.cur = &component{id: t.nextID, anchor: seg.Rect, rect: seg.Rect, stable: 1}
 }
 
-// moved reports whether b is a different placement than a: the centre
-// shifted by more than 3% of the frame diagonal, the size changed by more
-// than 15%, or the rectangle turned by more than 8°.
-func moved(a, b preprocess.RotatedRect, frame image.Rectangle) bool {
-	diag := math.Hypot(float64(frame.Dx()), float64(frame.Dy()))
-	shift := math.Hypot(a.Center.X-b.Center.X, a.Center.Y-b.Center.Y)
-	size := math.Abs(a.W*a.H-b.W*b.H) / math.Max(a.W*a.H, 1)
-	turn := math.Mod(math.Abs(a.Angle-b.Angle), math.Pi)
-	turn = math.Min(turn, math.Pi-turn)
-	// Nearly square bodies have no stable long axis; ignore their angle.
-	if math.Max(a.W/a.H, b.W/b.H) < 1.15 {
-		turn = 0
+// samePlace reports whether two detections are the same placement of a
+// component: most of one rectangle lies inside the other. Lighting changes
+// make the detected outline gain or lose the shadow and the leads, which
+// changes its size by up to ~75% and, for nearly square outlines, swaps
+// width and height; containment is insensitive to both. A moved or
+// replaced component overlaps little.
+func samePlace(a, b preprocess.RotatedRect) bool {
+	return max(inside(a, b), inside(b, a)) >= 0.5
+}
+
+// inside is the fraction of rectangle a that lies inside rectangle b,
+// estimated on a 9x9 grid of points.
+func inside(a, b preprocess.RotatedRect) float64 {
+	const n = 9
+	ua := [2]float64{math.Cos(a.Angle), math.Sin(a.Angle)}
+	ub := [2]float64{math.Cos(b.Angle), math.Sin(b.Angle)}
+	in := 0
+	for i := 0; i < n; i++ {
+		for j := 0; j < n; j++ {
+			u := ((float64(i)+0.5)/n - 0.5) * a.W
+			v := ((float64(j)+0.5)/n - 0.5) * a.H
+			x := a.Center.X + u*ua[0] - v*ua[1] - b.Center.X
+			y := a.Center.Y + u*ua[1] + v*ua[0] - b.Center.Y
+			if math.Abs(x*ub[0]+y*ub[1]) <= b.W/2 && math.Abs(-x*ub[1]+y*ub[0]) <= b.H/2 {
+				in++
+			}
+		}
 	}
-	return shift > 0.03*diag || size > 0.15 || turn > 8*math.Pi/180
+	return float64(in) / (n * n)
 }
 
 // runAttempt captures an image and recognises it (in its own goroutine).

@@ -59,15 +59,26 @@ the frame edge (it will be detected, but the crop is partial).
 nothing detected ──place──► Working (orange) ──recognised──► Reliable (green) / Unreliable (red)
                                ▲      │
         moved / replaced ──────┘      └─ up to 3 attempts, best kept
+        (2 detections elsewhere)
 removed (3 empty detections) ──► Empty
 ```
 
 - **Detection** runs on stream frames about every 200 ms: decode the JPEG, `Segment`. It is cheap
   and gives the rectangle drawn over the video.
-- **Stability.** Recognition starts after 3 detections in the same place. "Same place": the centre
-  moved less than 3% of the frame diagonal, the area changed less than 15%, the angle less than 8°
-  (ignored for nearly square bodies, whose long axis is unstable). A hand reaching in, a nudge or a
-  swap counts as a new component.
+- **Stability.** Recognition starts after 3 detections at the same place.
+- **Same place** means that at least half of one rectangle lies inside the other, compared with
+  where the component was first detected.
+  - **Why containment.** Lighting changes make the detected outline gain or lose the shadow and the
+    leads from frame to frame. That changes its size by up to ~75%, shifts its centre by up to
+    ~7% of the frame diagonal, and for nearly square outlines swaps width and height, which looks
+    like a 90° turn. Containment ignores all of that.
+  - **History.** The first version compared centre, size and angle against fixed limits, and
+    restarted recognition on still parts under changing light. Exposure, contrast and noise
+    variations alone made 19 of 39 photos restart; with containment, none did (lowest overlap
+    0.96).
+- **Moved** means 2 consecutive detections at another place. A single odd detection, such as glare
+  or a hand passing, is ignored. A component moved by more than about half its size, or replaced,
+  starts over; a small nudge keeps the reading.
 - **Removal.** 3 detections without a component.
 - **Attempts.** Each attempt takes a new full-resolution capture (`POST /api/capture`, 2028×1520, the
   same as the sample photos; the stream frame is used if the capture fails). Up to 3 attempts; a
