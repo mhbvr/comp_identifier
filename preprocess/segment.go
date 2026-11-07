@@ -216,13 +216,16 @@ func fillHoles(m *Mask) *Mask {
 	return out
 }
 
-// ToGray renders the mask as a black/white image (debug aid).
-func (m *Mask) ToGray() *image.Gray {
-	g := image.NewGray(image.Rect(0, 0, m.W, m.H))
-	for i, v := range m.Pix {
-		if v {
-			g.Pix[i] = 255
+// otsuMasked is Otsu's threshold over the pixels of p inside m.
+func otsuMasked(p *Plane, m *Mask) float32 {
+	var vals []float32
+	for i, in := range m.Pix {
+		if in {
+			vals = append(vals, p.Pix[i])
 		}
 	}
-	return g
+	if len(vals) == 0 {
+		return otsu(p)
+	}
+	return otsu(&Plane{W: len(vals), H: 1, Pix: vals})
 }

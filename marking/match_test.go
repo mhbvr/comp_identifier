@@ -25,16 +25,13 @@ func TestMatchToken(t *testing.T) {
 	}
 }
 
-func TestScorePrefersConfidentLongWords(t *testing.T) {
-	good := &ocr.Result{Words: []ocr.Word{{Text: "LM35", Confidence: 90}, {Text: "DZ", Confidence: 85}}}
-	noise := &ocr.Result{Words: []ocr.Word{
-		{Text: "S", Confidence: 60}, {Text: "J", Confidence: 55}, {Text: "4A", Confidence: 40},
-		{Text: "Z", Confidence: 70}, {Text: "WE", Confidence: 45},
-	}}
+func TestScorePrefersConfidentLongLines(t *testing.T) {
+	good := []ocr.Line{{Text: "LM35", Confidence: 0.98}, {Text: "DZ", Confidence: 0.95}}
+	noise := []ocr.Line{{Text: "S", Confidence: 0.6}, {Text: "J.", Confidence: 0.55}, {Text: "4A", Confidence: 0.5}}
 	if score(good) <= score(noise) {
 		t.Errorf("score(good)=%.2f <= score(noise)=%.2f", score(good), score(noise))
 	}
-	if score(&ocr.Result{}) != 0 {
-		t.Error("empty result should score 0")
+	if score(nil) != 0 {
+		t.Error("no lines should score 0")
 	}
 }

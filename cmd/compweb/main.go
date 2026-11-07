@@ -29,13 +29,11 @@ import (
 )
 
 func main() {
-	ocr.LimitOpenMPThreads()
-
 	listen := flag.String("listen", ":8090", "HTTP listen address")
 	camURL := flag.String("camera", "http://raspberrypi.local:8080", "camera_rpi (camweb) base URL")
 	camCA := flag.String("camera-ca", "", "PEM CA certificate to trust for an https:// camera")
 	useCapture := flag.Bool("capture", true, "recognise full-resolution captures (POST /api/capture); false: use stream frames")
-	tessdata := flag.String("tessdata", "", "Tesseract tessdata directory (default: system models)")
+	onnxLib := flag.String("onnxruntime", "", "ONNX Runtime shared library (default: $ONNXRUNTIME_LIB, else libonnxruntime.so)")
 	useClaude := flag.Bool("claude", true, "offer identification with the Claude API (needs ANTHROPIC_API_KEY or 'ant auth login')")
 	claudeModel := flag.String("claude-model", claude.DefaultModel, "Claude model for identification")
 	flag.Parse()
@@ -49,9 +47,7 @@ func main() {
 		cam.HTTP = client
 	}
 
-	opt := marking.DefaultOptions()
-	opt.OCR.TessdataPrefix = *tessdata
-	reader, err := marking.NewReader(opt)
+	reader, err := marking.NewReader(marking.Options{OCR: ocr.Config{Library: *onnxLib}})
 	if err != nil {
 		log.Fatal(err)
 	}

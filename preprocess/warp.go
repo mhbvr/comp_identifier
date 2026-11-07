@@ -73,14 +73,6 @@ func bilinear(s *image.RGBA, w, h int, x, y float64, dst []uint8) {
 	dst[3] = 255
 }
 
-// RotateGray rotates g clockwise by quarterTurns * 90 degrees.
-func RotateGray(g *image.Gray, quarterTurns int) *image.Gray {
-	w, h := g.Rect.Dx(), g.Rect.Dy()
-	out := image.NewGray(rotatedBounds(w, h, quarterTurns))
-	rotatePix(out.Pix, out.Stride, g.Pix[g.PixOffset(g.Rect.Min.X, g.Rect.Min.Y):], g.Stride, w, h, 1, quarterTurns)
-	return out
-}
-
 // RotateRGBA rotates img clockwise by quarterTurns * 90 degrees.
 func RotateRGBA(img *image.RGBA, quarterTurns int) *image.RGBA {
 	w, h := img.Rect.Dx(), img.Rect.Dy()

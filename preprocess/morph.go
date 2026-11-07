@@ -178,11 +178,8 @@ func keepLabel(labels []int32, w, h int, lbl int) *Mask {
 	return out
 }
 
-// minFilter / maxFilter implement grayscale erosion / dilation with a
-// (2r+1)x(2r+1) square using separable monotonic-deque sliding windows.
-func minFilter(p *Plane, r int) *Plane {
-	return slidingExtreme(p, r, func(a, b float32) bool { return a <= b })
-}
+// maxFilter is a grayscale dilation with a (2r+1)x(2r+1) square, using
+// separable monotonic-deque sliding windows.
 func maxFilter(p *Plane, r int) *Plane {
 	return slidingExtreme(p, r, func(a, b float32) bool { return a >= b })
 }

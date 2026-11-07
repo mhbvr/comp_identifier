@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mhbvr/comp_identifier/marking"
+	"github.com/mhbvr/comp_identifier/ocr"
 	"github.com/mhbvr/comp_identifier/preprocess"
 )
 
@@ -64,8 +65,8 @@ type fakeRecognizer struct {
 func reading(text string, score float64, reliable bool) *marking.Result {
 	return &marking.Result{
 		Text: text, Lines: []string{text}, Confidence: 90, Reliable: reliable,
-		Best:       marking.Candidate{Variant: "clean", Score: score, Image: image.NewGray(image.Rect(0, 0, 4, 4))},
-		Preprocess: &preprocess.Result{Crop: image.NewRGBA(image.Rect(0, 0, 4, 4))},
+		Score: score, Upright: image.NewRGBA(image.Rect(0, 0, 4, 4)),
+		TextLines: []ocr.Line{{Text: text, Confidence: 0.9, Image: image.NewRGBA(image.Rect(0, 0, 8, 4))}},
 	}
 }
 

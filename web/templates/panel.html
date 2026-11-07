@@ -20,15 +20,15 @@
   <img src="/img/{{.ID}}/crop.png?a={{.Attempts}}" alt="component crop">
   <figcaption>Component, turned so the text reads upright</figcaption>
 </figure>
-<figure>
-  <img src="/img/{{.ID}}/ocr.png?a={{.Attempts}}" alt="OCR input">
-  <figcaption>Image the text was read from</figcaption>
-</figure>
+{{if .OCRPNG}}<figure>
+  <img src="/img/{{.ID}}/ocr.png?a={{.Attempts}}" alt="text lines read by OCR">
+  <figcaption>Text lines the recogniser read</figcaption>
+</figure>{{end}}
 <p class="text">{{if .Text}}{{.Text}}{{else}}(no text found){{end}}</p>
 <p class="meta">
-  confidence {{printf "%.0f" .Confidence}} ·
+  confidence {{printf "%.0f" (pct .Confidence)}}% ·
   {{.Attempts}} attempt{{if gt .Attempts 1}}s{{end}} ·
-  {{ms .Elapsed}} ms · {{.Variant}} at {{.Rotation}}°
+  {{ms .Elapsed}} ms · read at {{.Rotation}}°
 </p>
 {{end}}
 

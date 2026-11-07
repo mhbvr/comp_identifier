@@ -1,18 +1,17 @@
-// Package preprocess prepares photos of electronic components for OCR.
+// Package preprocess finds an electronic component in a photo and cuts it
+// out, aligned.
 //
-// The expected input is a photo of a single marked component (IC, MOSFET,
-// BJT, regulator, ...) on a white background. Processing steps:
+// The expected input is a photo of a single component (IC, MOSFET, BJT,
+// regulator, ...) on a white background. Process:
 //
 //  1. Segment: find the dark component body against the (possibly unevenly
-//     lit) white background, strip thin protrusions such as leads and fit a
-//     minimum-area rotated rectangle around it.
+//     lit) white background, drop shadows and thin protrusions such as
+//     leads, and fit a minimum-area rotated rectangle around it.
 //  2. Align and crop: resample that rectangle into an axis-aligned image
-//     with the long side horizontal, at a normalised resolution.
-//  3. Enhance: produce several high-contrast, dark-on-light renderings of
-//     the crop suitable for an OCR engine.
+//     with the long side horizontal, at a normalised height.
 //
-// The remaining ambiguity (text may be upside down or run along the short
-// side) is resolved by the OCR stage, which tries all four orientations.
+// Text may still be upside down or run along the short side; the marking
+// package resolves that by reading all four orientations.
 //
 // The package is pure Go and has no dependencies outside the standard
 // library.
@@ -23,7 +22,7 @@ import (
 	"math"
 )
 
-// Options configures Process.
+// Options configures Segment and Process.
 type Options struct {
 	// WorkSize is the longest side, in pixels, of the downscaled image used
 	// for segmentation. Default 640.
@@ -37,8 +36,6 @@ type Options struct {
 	// TargetHeight is the height (short side) of the aligned crop in pixels.
 	// Default 360.
 	TargetHeight int
-	// Enhance controls variant generation.
-	Enhance EnhanceOptions
 }
 
 func (o Options) withDefaults() Options {
@@ -57,7 +54,7 @@ func (o Options) withDefaults() Options {
 	return o
 }
 
-// Result holds every intermediate product of Process.
+// Result is the output of Process.
 type Result struct {
 	Segmentation *Segmentation
 	// Rect is the region that was cropped (segmentation rect plus margin),
@@ -65,17 +62,10 @@ type Result struct {
 	Rect RotatedRect
 	// Crop is the aligned colour crop, long side horizontal.
 	Crop *image.RGBA
-	// Variants are OCR-ready grayscale renderings of Crop.
-	Variants []Variant
-	// BodyMask marks the package body inside Crop.
-	BodyMask *Mask
-	// Polarity is the marking polarity used for enhancement.
-	Polarity Polarity
-	// Text is the detected marking layout (nil if none was found).
-	Text *TextLayout
 }
 
-// Process runs segmentation, alignment, cropping and enhancement.
+// Process finds the component in img and returns its aligned crop. It
+// returns ErrNoComponent if there is none.
 func Process(img image.Image, opt Options) (*Result, error) {
 	opt = opt.withDefaults()
 	src := toRGBA(img)
@@ -85,15 +75,5 @@ func Process(img image.Image, opt Options) (*Result, error) {
 	}
 	rect := seg.Rect.Grow(opt.Margin)
 	scale := float64(opt.TargetHeight) / math.Max(rect.H, 1)
-	crop := ExtractRect(src, rect, scale)
-	enh := Enhance(crop, opt.Enhance)
-	return &Result{
-		Segmentation: seg,
-		Rect:         rect,
-		Crop:         crop,
-		Variants:     enh.Variants,
-		BodyMask:     enh.BodyMask,
-		Polarity:     enh.Polarity,
-		Text:         enh.Text,
-	}, nil
+	return &Result{Segmentation: seg, Rect: rect, Crop: ExtractRect(src, rect, scale)}, nil
 }

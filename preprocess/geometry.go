@@ -168,3 +168,6 @@ func maskBoundary(m *Mask) []Point {
 	}
 	return pts
 }
+
+// MinAreaRect returns the minimum-area rectangle enclosing pts.
+func MinAreaRect(pts []Point) RotatedRect { return minAreaRect(convexHull(pts)) }
