@@ -20,25 +20,32 @@ photo ─► find + align component ─► crop ─► text detection + recognit
 
 ## Install
 
-Requirements: Go 1.25+ with cgo, and the **ONNX Runtime 1.31+** shared library. The OCR models are
-embedded in the binary.
+Requirements: Go 1.25+ with cgo, and the **ONNX Runtime 1.19 or newer** shared library. The OCR
+models are embedded in the binary.
 
-ONNX Runtime, Linux x86-64 (for a Raspberry Pi 4 with a 64-bit OS, use `onnxruntime-linux-aarch64-1.31.0.tgz`):
+ONNX Runtime from your distribution, if it packages it (it is then found as `libonnxruntime.so`
+without further setup). On Arch Linux:
 
 ```bash
-curl -LO https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-linux-x64-1.31.0.tgz
+sudo pacman -S onnxruntime-cpu
+```
+
+Otherwise use an official build. For Linux x86-64 (for a Raspberry Pi 4 with a 64-bit OS, use
+`onnxruntime-linux-aarch64-1.29.0.tgz`):
+
+```bash
+curl -LO https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-linux-x64-1.29.0.tgz
 ```
 
 ```bash
-tar xzf onnxruntime-linux-x64-1.31.0.tgz
+tar xzf onnxruntime-linux-x64-1.29.0.tgz
 ```
 
 ```bash
-export ONNXRUNTIME_LIB=$PWD/onnxruntime-linux-x64-1.31.0/lib/libonnxruntime.so.1.31.0
+export ONNXRUNTIME_LIB=$PWD/onnxruntime-linux-x64-1.29.0/lib/libonnxruntime.so.1.29.0
 ```
 
-Instead of the environment variable you can pass `-onnxruntime PATH` to either program, or install
-the library where the system linker finds `libonnxruntime.so`.
+Instead of the environment variable you can pass `-onnxruntime PATH` to either program.
 
 Build:
 
