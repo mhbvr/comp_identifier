@@ -5,8 +5,8 @@
 //
 // Each request is kept small, about 500-700 input tokens:
 //   - the image is the upright colour crop scaled to fit 512x384 pixels
-//     (Claude bills images at about width*height/750 tokens, so at most
-//     ~260 tokens), sent as JPEG;
+//     (Claude bills an image as ceil(w/28) x ceil(h/28) visual tokens, so at
+//     most 266 tokens), sent as JPEG;
 //   - a short system prompt and the OCR text as a one-line hint;
 //   - the answer is schema-constrained JSON (no prose), at low effort.
 //
@@ -34,7 +34,7 @@ import (
 const DefaultModel = "claude-opus-5-5"
 
 // Image size limits: large enough for markings to stay legible, small
-// enough to keep the image under ~260 tokens.
+// enough to keep the image at or under 266 tokens.
 const maxW, maxH = 512, 384
 
 // promptTokens estimates the request's text: system prompt, JSON schema
@@ -98,7 +98,7 @@ func (c *Identifier) Model() string { return c.model }
 // image of w x h pixels.
 func EstimateTokens(w, h int) int {
 	w, h = fit(w, h)
-	return promptTokens + (w*h+749)/750
+	return promptTokens + ((w+27)/28)*((h+27)/28) // 28x28-pixel visual tokens
 }
 
 // Identify asks Claude what the component in img is. ocr is the local OCR

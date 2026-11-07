@@ -85,12 +85,11 @@ type Reading struct {
 	Confidence float64
 	Reliable   bool
 	Attempts   int
-	Variant    string
-	Rotation   int
+	Rotation   int           // degrees clockwise the crop was turned to read it
 	Elapsed    time.Duration // time spent recognising, all attempts
 	At         time.Time
 	CropPNG    []byte // colour crop of the component, turned so the text reads upright
-	OCRPNG     []byte // the image the winning text was read from
+	OCRPNG     []byte // the text lines the recogniser read, stacked (nil if none)
 }
 
 // Snapshot is the state shown to the user.
@@ -303,19 +302,21 @@ func better(a, b *marking.Result) bool {
 	if b == nil || a.Reliable != b.Reliable {
 		return b == nil || a.Reliable
 	}
-	return a.Best.Score > b.Best.Score
+	return a.Score > b.Score
 }
 
 func newReading(c *component) *Reading {
 	res := c.best
-	return &Reading{
+	r := &Reading{
 		ID: c.id, Text: res.Text, Lines: res.Lines, Confidence: res.Confidence,
 		Reliable: c.reliable, Attempts: c.attempts,
-		Variant: res.Best.Variant, Rotation: res.Best.Rotation,
-		Elapsed: c.elapsed, At: time.Now(),
-		CropPNG: encodePNG(preprocess.RotateRGBA(res.Preprocess.Crop, res.Best.Rotation/90)),
-		OCRPNG:  encodePNG(res.Best.Image),
+		Rotation: res.Rotation, Elapsed: c.elapsed, At: time.Now(),
+		CropPNG: encodePNG(res.Upright),
 	}
+	if lines := res.LinesImage(); lines != nil {
+		r.OCRPNG = encodePNG(lines)
+	}
+	return r
 }
 
 func encodePNG(img image.Image) []byte {

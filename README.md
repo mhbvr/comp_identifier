@@ -2,44 +2,49 @@
 
 Identify electronic components (ICs, MOSFETs, BJTs, regulators, …) from photos.
 
-It reads the **marking text** on a component lying on a white background, either
-from photos (`compid`) or live under a camera in a web app (`compweb`). It's
-written in Go and runs locally (Tesseract OCR). There is no component database
-yet: the result is the text on the part. On request, the web app can also ask
-the Claude API to identify the part (canonical part number, manufacturer,
-description, datasheet link).
+It reads the **marking text** on a component lying on a white background, either live under a
+camera in a web app (`compweb`) or from photos (`compid`). Recognition runs locally, with PaddleOCR
+models on ONNX Runtime. There is no component database yet: the result is the text on the part.
+On request, the web app also asks the Claude API to identify the part: canonical part number,
+manufacturer, description and datasheet link.
 
 ```
-photo ──► segment ──► rotate + crop ──► enhance ──► OCR × 4 orientations ──► best text
+photo ─► find + align component ─► crop ─► text detection + recognition × 4 rotations ─► best text
 ```
 
-| package | what it does | deps |
-|---|---|---|
-| `preprocess` | finds the component, aligns and crops it, builds OCR-ready images | pure Go, stdlib only |
-| `ocr` | small engine interface over Tesseract: in-process `LibEngine` (C API via cgo) or `CLIEngine` (runs `tesseract`) | libtesseract / tesseract binary |
-| `marking` | glue: preprocess → OCR every variant at 0/90/180/270° → pick the most confident reading | — |
-| `camera` | client for the [camera_rpi](https://github.com/mhbvr/camera_rpi) REST API: MJPEG stream and captures (read-only) | — |
-| `tracker` | watches the stream: detects a placed / moved / removed component, recognises it | — |
-| `web` | the web UI: `html/template` pages, MJPEG relay | — |
-| `claude` | optional identification with the Claude API, sized for few tokens | Anthropic Go SDK |
-| `cmd/compweb` | the web app | — |
-| `cmd/compid` | command-line tool, debug image dump, accuracy evaluation | — |
-| `cmd/photocam` | fake camera serving photos, for developing `compweb` without a Pi | — |
+| doc | contents |
+|---|---|
+| [doc/architecture.md](doc/architecture.md) | packages, data flow, runtime requirements, concurrency, tests |
+| [doc/design.md](doc/design.md) | how each part works and why: segmentation, rotation search, tracking, web UI, Claude |
+| [doc/text-recognition.md](doc/text-recognition.md) | OCR findings: Tesseract vs PaddleOCR measurements, what Claude does differently, remaining errors, next steps |
 
 ## Install
 
+Requirements: Go 1.25+ with cgo, and the **ONNX Runtime 1.31+** shared library. The OCR models are
+embedded in the binary.
+
+ONNX Runtime, Linux x86-64 (for a Raspberry Pi 4 with a 64-bit OS, use `onnxruntime-linux-aarch64-1.31.0.tgz`):
+
 ```bash
-sudo apt-get install -y tesseract-ocr tesseract-ocr-eng libtesseract-dev libleptonica-dev pkg-config
+curl -LO https://github.com/microsoft/onnxruntime/releases/download/v1.31.0/onnxruntime-linux-x64-1.31.0.tgz
 ```
 
-Go 1.25 or newer is needed (the Anthropic Go SDK requires it).
-
 ```bash
-go build ./cmd/compid ./cmd/compweb
+tar xzf onnxruntime-linux-x64-1.31.0.tgz
 ```
 
-You can also build with `CGO_ENABLED=0`. Then only the `tesseract` binary is needed at run time, and the
-`CLIEngine` is used automatically (it is about 3× slower).
+```bash
+export ONNXRUNTIME_LIB=$PWD/onnxruntime-linux-x64-1.31.0/lib/libonnxruntime.so.1.31.0
+```
+
+Instead of the environment variable you can pass `-onnxruntime PATH` to either program, or install
+the library where the system linker finds `libonnxruntime.so`.
+
+Build:
+
+```bash
+go build ./cmd/compweb ./cmd/compid
+```
 
 ## Web app
 
@@ -47,71 +52,29 @@ You can also build with `CGO_ENABLED=0`. Then only the `tesseract` binary is nee
 ./compweb -camera http://raspberrypi.local:8080 -listen :8090
 ```
 
-Open `http://localhost:8090`. The page shows the live camera view with a rectangle around the component:
+Open `http://localhost:8090`. The live camera view shows a rectangle around the component:
 
-- **orange**: a component is detected and is being recognised;
-- **green**: the text was read with high confidence;
-- **red**: the text was read, but with low confidence.
+- **orange**: detected, being recognised;
+- **green**: text read with high confidence;
+- **red**: text read with low confidence.
 
-Next to the video, top to bottom: the crop of the component turned so its text reads upright, the image the
-text was read from, the recognised text, then the confidence and details (attempts, time, variant,
-rotation). Take the component away and put the next one down; the panel follows the component in view.
+Next to the video, top to bottom:
+- the component, turned so its text reads upright;
+- the text lines the recogniser read;
+- the recognised text;
+- confidence, attempts, time and rotation.
 
-How it works:
-- **Live view.** `compweb` reads the camera's `/stream.mjpeg` once and relays the frames unchanged to every
-  browser (`/live.mjpeg`), so the page needs no video JavaScript.
-- **Detection.** About five times a second the tracker segments the newest frame. A component counts as
-  placed once it has stayed still for 3 detections. It counts as removed after 3 empty ones. If it moves,
-  turns or is replaced, it is recognised again.
-- **Recognition.** Each attempt takes a full-resolution capture (`POST /api/capture`, 2028×1520, the same as
-  the sample photos) and reads it, which takes about a second. There are up to 3 attempts, and the best
-  reading is kept. It stops early on a reliable reading: mean character confidence ≥ 97, or two
-  independent image variants reading exactly the same text. On the sample photos both rules were right
-  about 9 times out of 10, but most correct readings don't reach them, so expect red often.
-- **Read-only.** Camera settings are never changed. `-capture=false` recognises stream frames instead of
-  captures. `-camera-ca certs/ca.crt` trusts camera_rpi's own CA for an `https://` camera.
-- **The page** is two `html/template` templates. A few lines of inline JavaScript re-fetch the dynamic part
-  (`/panel`: the SVG rectangle and the result panel) every 300 ms, and send the Claude request. No
-  third-party front-end dependencies.
+Take the component away and put the next one down. Camera settings are never changed.
 
-### Identify with Claude
+**Identify with Claude:** press the button or the **i** key. It costs about 600 input tokens per
+part; nothing is sent without your request. Credentials come from `ANTHROPIC_API_KEY` or `ant auth
+login`. `-claude=false` hides the button and `-claude-model` picks the model (default
+`claude-opus-5-5`). Details: [doc/design.md](doc/design.md#identification-with-claude-claude).
 
-For the component on screen, press **Identify with Claude** or the **i** key. Nothing is sent to Claude
-without that. The panel then shows Claude's canonical part number, manufacturer, description, the marking as
-Claude read it, a datasheet link and the tokens used. Each reading is sent at most once; if the request
-fails, you can retry it.
-
-Credentials come from `ANTHROPIC_API_KEY` or a profile from `ant auth login`. `-claude=false` hides the
-button. `-claude-model` picks the model; the default is `claude-opus-5-5`.
-
-**Tokens per identification.** These are estimates: they haven't been measured against the real API yet. The
-page shows the estimate before you send, and the actual usage after.
-
-| part | tokens | how it is kept small |
-|---|---|---|
-| image | ≤ ~260 | the upright colour crop scaled to fit 512×384 and sent as JPEG; images cost about width×height/750 tokens |
-| system prompt, JSON schema, OCR hint | ~350 | a four-sentence prompt; the local OCR text as a one-line hint |
-| output | ~100 JSON + thinking | schema-constrained JSON with no prose, at `effort: low` |
-
-That is roughly 500–650 input and 150–400 output tokens per part: about $0.005–0.01 on Claude Opus 5.5 at
-$4 / $20 per million tokens. `-claude-model claude-haiku-5-5` uses about the same number of tokens at a
-fraction of the price, if its readings are good enough for you.
-
-Choices behind those numbers:
-- **The image is the colour crop, not the OCR image.** The logo and package shape help identify the part,
-  and at 512×384 the marking stays legible.
-- **No web search.** Search results would add thousands of input tokens per part. The datasheet URL comes
-  from Claude's knowledge and is left empty when Claude isn't sure, so treat it as unverified. A free
-  search link built from the part number is always shown.
-- **No prompt caching.** The fixed part of the request is far below the minimum cacheable prefix, so caching
-  would not save anything.
-- **Refusal fallback on.** If a safety classifier declines, the server retries on its default fallback model
-  (`fallbacks: "default"`); the panel shows which model answered.
-
-Without a Pi, the fake camera shows each photo for 8 s, then empty paper for 3 s, in a loop:
+Without a Pi, the fake camera serves photos, alternating with empty paper:
 
 ```bash
-go run ./cmd/photocam -listen :8080 components_photos/*.jpg
+go run ./cmd/photocam -listen :8080 components_photos_2/*.jpg
 ```
 
 ```bash
@@ -121,96 +84,43 @@ go run ./cmd/compweb -camera http://localhost:8080
 ## Command line
 
 ```bash
-./compid components_photos/IMG_20261107_115535.jpg
+./compid components_photos_2/IMG_20261107_171749.jpg
 ```
 
 ```
-components_photos/IMG_20261107_115535.jpg: "JCBC / 33740 / R25" (conf 99, tophat@180°, 478ms)
+components_photos_2/IMG_20261107_171749.jpg: "31AE9XM / TL072IP" (confidence 98%, read at 0°, 1.2s)
 ```
 
-Useful flags: `-all` lists every OCR candidate. `-json` prints one JSON object per photo. `-debug DIR` writes
-the intermediate images. `-eval labels.csv` measures accuracy (see below). `-tessdata DIR` uses other models.
+Flags:
+- `-all`: list the reading at every rotation.
+- `-json`: one JSON object per photo.
+- `-debug DIR`: write the detected rectangle, crop, upright crop and line images.
+- `-eval labels.csv`: measure accuracy.
 
 As a library:
 
 ```go
-r, err := marking.NewReader(marking.DefaultOptions())
+r, err := marking.NewReader(marking.Options{}) // ocr.Config{Library: ...} if not in $ONNXRUNTIME_LIB
 if err != nil { ... }
-defer r.Close()            // a Reader is not goroutine-safe; use one per goroutine
-res, err := r.Read(img)    // img is any image.Image; preprocess.ErrNoComponent if empty
-fmt.Println(res.Text)      // lines separated by "\n"
-fmt.Println(res.Reliable)  // high-confidence reading?
-// res.Candidates: all readings, best first. res.Preprocess: crop, masks, variants.
+defer r.Close()
+res, err := r.Read(img)   // img is any image.Image; preprocess.ErrNoComponent if empty
+fmt.Println(res.Text)     // lines separated by "\n"
+fmt.Println(res.Reliable) // confidence ≥ 0.93
 ```
 
-`preprocess.Process(img, preprocess.Options{})` can be used on its own. It needs nothing outside the standard library.
+## Accuracy
 
-### Performance note: `OMP_THREAD_LIMIT=1`
-
-Tesseract's OpenMP threading makes OCR of these small images about **4–5× slower**: 4.4 s vs 0.9 s per photo
-on one core. libgomp reads the limit only at process start. `compid`, `compweb` and the test binaries call
-`ocr.LimitOpenMPThreads()`, which re-execs the process with `OMP_THREAD_LIMIT=1`. **Programs that use
-the library should do the same, or set the variable in their environment.** To use
-several cores, run several `Reader`s in parallel, as `compid` does.
-
-## How recognition works
-
-1. **Segment** (`preprocess/segment.go`). The photo is downscaled to about 640 px. A *foreground map* measures
-   how much darker each pixel is than the local white level. It is based on `min(R,G,B)`, so black epoxy and
-   coloured packages stand out but shiny leads do not. The local white level is estimated with a large max
-   filter plus a blur, which cancels vignetting and colour casts. The steps after that:
-   - Otsu threshold, closing, then the largest blob with its holes filled.
-   - A strong shadow can pass that threshold and merge with the body. It is lighter than the package, so the
-     blob is split once more by Otsu over its own pixels, and the dark core is kept when it still covers at
-     least 60% of the blob.
-   - An opening sized to the blob removes leads, including tarnished dark ones.
-   - The minimum-area rotated rectangle of the convex hull gives the body (rotating calipers).
-2. **Rotate + crop** (`warp.go`). The rectangle plus a 10% margin is resampled (bilinear) into an
-   axis-aligned image, long side horizontal, 360 px tall.
-3. **Enhance** (`enhance.go`, `textmask.go`):
-   - *Body mask* inside the crop. An opening removes leads, and the rim is eroded away so package edges
-     don't count.
-   - *Top-hat transform*: the image minus its morphological opening. It keeps thin bright strokes and removes
-     glare gradients, the body and the paper.
-   - *Character extraction*: a threshold capped by a noise estimate (median + 6·MAD) avoids being pulled up
-     by bright clutter. Strong strokes grow into adjacent weak pixels. Connected components that touch the
-     body edge, are tiny, or have the wrong size are dropped. Size is measured *across* the text line, because
-     touching letters merge into word-sized blobs. Whichever box dimension clusters best gives the text
-     direction and the character height.
-   - *Polarity*: light-on-dark (laser marks) or dark-on-light (e.g. a tan package). Both are tried, and the
-     one that yields more consistent character blobs wins. When it's close, both are sent to OCR.
-   - *Variants*, rescaled so characters are about 44 px tall (best for the stock model) and padded:
-     `clean` (kept components, binary), `soft` (top-hat around them), `tophat` (whole body).
-4. **OCR** (`ocr`, `marking`). Each variant is OCR'd at 0/90/180/270° with Tesseract LSTM. The settings are
-   PSM 6, a whitelist `A-Z 0-9 - / . +`, and no dictionaries. Candidates are scored by
-   Σ chars × (mean char confidence)³, with 1–2 character words discounted. Per-character confidence matters
-   because Tesseract's LSTM *word* confidence is about the worst character's, often 0 for almost-right words.
-
-## Accuracy on the sample photos
-
-`components_photos/labels.csv` lists the expected part-number token for each of the 77 photos (24 distinct
-components: DIP, SOIC, TO-92, TO-220).
+Two labelled photo sets (`components_photos*/labels.csv`, expected part number per photo):
 
 ```bash
 ./compid -eval components_photos/labels.csv
 ```
 
-| | photos |
-|---|---|
-| part number read exactly | 30 / 77 (39 %) |
-| within one character edit | 42 / 77 (55 %) |
-| time | ~0.9 s per photo per core |
+| set | part number exact | within one edit |
+|---|---|---|
+| `components_photos` (77 photos, 24 parts) | 69 (90%) | 71 (92%) |
+| `components_photos_2` (19 photos, 13 parts, harder light) | 15 (79%) | 17 (89%) |
 
-`go test ./...` runs this as a regression test (`marking/photos_test.go`). Use `-short` to skip it.
-
-Typical remaining errors are look-alike characters in laser-etched fonts: `0/O/D`, `5/S`, `1/I/T`, `8/B`, a
-dropped `1`. There are also faint or glare-washed markings, especially TO-220 regulators.
-
-## Limitations and next steps
-
-- **Better models.** The Ubuntu `tesseract-ocr-eng` package ships the small "fast" model. Try `tessdata_best`
-  or a model fine-tuned on component markings with `-tessdata DIR` / `ocr.Config.TessdataPrefix`.
-- **Fuzzy matching against a part database** is the natural next stage. With a confusion-aware distance
-  (`0≈O≈D`, `5≈S`, `1≈I`, `8≈B`, `2≈Z`), most "within one edit" readings resolve to the right part.
-  `marking.MatchToken` and `Result.Candidates`, which keep several readings per photo, are hooks for it.
-- One component per photo is assumed. A plain white background works best.
+The previous Tesseract pipeline managed 30 and 5. Reading takes about 1–1.5 s per photo on one CPU core.
+`go test ./...` runs both sets as a regression test (skipped without ONNX Runtime or with `-short`).
+What's left and what to do about it: [doc/text-recognition.md](doc/text-recognition.md#remaining-errors-go-implementation).

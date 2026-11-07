@@ -21,7 +21,7 @@ import (
 	"github.com/mhbvr/comp_identifier/camera"
 	"github.com/mhbvr/comp_identifier/claude"
 	"github.com/mhbvr/comp_identifier/marking"
-	"github.com/mhbvr/comp_identifier/preprocess"
+	"github.com/mhbvr/comp_identifier/ocr"
 	"github.com/mhbvr/comp_identifier/tracker"
 )
 
@@ -119,8 +119,8 @@ func TestClaudeIdentify(t *testing.T) {
 	recognize := func(image.Image) (*marking.Result, error) {
 		return &marking.Result{
 			Text: "LM35", Lines: []string{"LM35"}, Confidence: 90,
-			Best:       marking.Candidate{Variant: "clean", Image: image.NewGray(image.Rect(0, 0, 8, 8))},
-			Preprocess: &preprocess.Result{Crop: image.NewRGBA(image.Rect(0, 0, 400, 300))},
+			Upright:   image.NewRGBA(image.Rect(0, 0, 400, 300)),
+			TextLines: []ocr.Line{{Text: "LM35", Confidence: 0.9, Image: image.NewRGBA(image.Rect(0, 0, 80, 30))}},
 		}, nil
 	}
 	tr := tracker.New(tracker.Config{DetectEvery: 5 * time.Millisecond}, source, nil, recognize)

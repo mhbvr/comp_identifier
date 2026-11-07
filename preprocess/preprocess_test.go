@@ -72,37 +72,14 @@ func TestErodeDilate(t *testing.T) {
 	}
 }
 
-func TestMinMaxFilter(t *testing.T) {
+func TestMaxFilter(t *testing.T) {
 	p := NewPlane(5, 1)
 	copy(p.Pix, []float32{5, 1, 7, 3, 9})
-	mn := minFilter(p, 1)
 	mx := maxFilter(p, 1)
-	wantMin := []float32{1, 1, 1, 3, 3}
-	wantMax := []float32{5, 7, 7, 9, 9}
-	for i := range wantMin {
-		if mn.Pix[i] != wantMin[i] || mx.Pix[i] != wantMax[i] {
-			t.Fatalf("min=%v max=%v", mn.Pix, mx.Pix)
-		}
-	}
-}
-
-func TestRotateGray(t *testing.T) {
-	g := image.NewGray(image.Rect(0, 0, 3, 2))
-	copy(g.Pix, []uint8{1, 2, 3, 4, 5, 6})
-	r := RotateGray(g, 1) // 90° clockwise
-	if r.Rect.Dx() != 2 || r.Rect.Dy() != 3 {
-		t.Fatalf("size %v", r.Rect)
-	}
-	want := []uint8{4, 1, 5, 2, 6, 3}
-	for i, v := range want {
-		if r.Pix[i] != v {
-			t.Fatalf("got %v, want %v", r.Pix, want)
-		}
-	}
-	back := RotateGray(RotateGray(r, 2), 1)
-	for i := range g.Pix {
-		if back.Pix[i] != g.Pix[i] {
-			t.Fatalf("four quarter turns changed the image: %v", back.Pix)
+	want := []float32{5, 7, 7, 9, 9}
+	for i := range want {
+		if mx.Pix[i] != want[i] {
+			t.Fatalf("max=%v, want %v", mx.Pix, want)
 		}
 	}
 }
@@ -118,11 +95,9 @@ func TestRotateRGBA(t *testing.T) {
 	if r.RGBAAt(0, 0).R != 1 || r.RGBAAt(0, 1).R != 4 {
 		t.Errorf("got %v %v", r.RGBAAt(0, 0), r.RGBAAt(0, 1))
 	}
-}
-
-func TestPolarityString(t *testing.T) {
-	if LightOnDark.String() != "light-on-dark" || DarkOnLight.String() != "dark-on-light" {
-		t.Error("unexpected polarity names")
+	back := RotateRGBA(RotateRGBA(r, 2), 1)
+	if back.Rect != img.Rect || back.RGBAAt(1, 0).R != 4 {
+		t.Errorf("four quarter turns changed the image")
 	}
 }
 
@@ -178,38 +153,25 @@ func TestSegmentSynthetic(t *testing.T) {
 	}
 }
 
-func TestProcessFindsCharacters(t *testing.T) {
-	img, _ := synthPhoto(28*math.Pi/180, 6)
+func TestProcessCrop(t *testing.T) {
+	img, rect := synthPhoto(28*math.Pi/180, 6)
 	res, err := Process(img, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Crop.Rect.Dx() < res.Crop.Rect.Dy() {
-		t.Errorf("crop is not landscape: %v", res.Crop.Rect)
+	// Landscape, normalised height; the width follows the body's aspect
+	// ratio (margin included).
+	b := res.Crop.Rect
+	if b.Dy() != 360 {
+		t.Errorf("crop height %d, want 360", b.Dy())
 	}
-	if res.Polarity != LightOnDark {
-		t.Errorf("polarity = %v", res.Polarity)
+	want := 360 * (rect.W + 0.2*rect.H) / (rect.H * 1.2)
+	if math.Abs(float64(b.Dx())-want) > 0.06*want {
+		t.Errorf("crop width %d, want about %.0f", b.Dx(), want)
 	}
-	if res.Text == nil {
-		t.Fatal("no text layout found")
-	}
-	if res.Text.Count != 6 {
-		t.Errorf("found %d characters, want 6", res.Text.Count)
-	}
-	if res.Text.Vertical {
-		t.Error("text reported vertical, want horizontal")
-	}
-	names := map[string]bool{}
-	for _, v := range res.Variants {
-		names[v.Name] = true
-		if v.Image.Rect.Empty() {
-			t.Errorf("variant %s is empty", v.Name)
-		}
-	}
-	for _, n := range []string{"clean", "soft", "tophat"} {
-		if !names[n] {
-			t.Errorf("missing variant %q", n)
-		}
+	// The body is dark and the crop centre lies on it.
+	if c := res.Crop.RGBAAt(b.Dx()/2, b.Dy()/2); c.R > 100 {
+		t.Errorf("crop centre %v is not on the body", c)
 	}
 }
 

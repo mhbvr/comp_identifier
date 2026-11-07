@@ -6,8 +6,11 @@
 //	compid -eval components_photos/labels.csv
 //
 // For every photo it prints the recognised text. With -debug DIR it also
-// writes the intermediate images (detected rectangle, aligned crop, body
-// mask, every OCR variant and the winning OCR input) to DIR.
+// writes the intermediate images (detected rectangle, aligned crop, upright
+// crop and the text lines the recogniser read) to DIR.
+//
+// It needs the ONNX Runtime shared library: -onnxruntime or
+// $ONNXRUNTIME_LIB.
 package main
 
 import (
@@ -34,34 +37,22 @@ import (
 )
 
 type flags struct {
-	debugDir   string
-	jsonOut    bool
-	all        bool
-	eval       string
-	workers    int
-	useCLI     bool
-	tessdata   string
-	lang       string
-	psm        int
-	whitelist  string
-	charHeight int
+	debugDir    string
+	jsonOut     bool
+	all         bool
+	eval        string
+	workers     int
+	onnxruntime string
 }
 
 func main() {
-	ocr.LimitOpenMPThreads()
-
 	var f flags
 	flag.StringVar(&f.debugDir, "debug", "", "write intermediate images to this directory")
 	flag.BoolVar(&f.jsonOut, "json", false, "print results as JSON lines")
 	flag.BoolVar(&f.all, "all", false, "also print every OCR candidate")
 	flag.StringVar(&f.eval, "eval", "", "evaluate against a labels CSV (file,expected-token per line; photos are resolved relative to the CSV)")
 	flag.IntVar(&f.workers, "workers", runtime.NumCPU(), "photos processed in parallel")
-	flag.BoolVar(&f.useCLI, "cli", false, "use the tesseract executable instead of libtesseract")
-	flag.StringVar(&f.tessdata, "tessdata", "", "tessdata directory (e.g. one holding tessdata_best models)")
-	flag.StringVar(&f.lang, "lang", "eng", "Tesseract language(s), '+'-separated")
-	flag.IntVar(&f.psm, "psm", int(ocr.PSMSingleBlock), "Tesseract page segmentation mode")
-	flag.StringVar(&f.whitelist, "whitelist", ocr.DefaultWhitelist, "characters Tesseract may output (empty: no restriction)")
-	flag.IntVar(&f.charHeight, "char-height", 0, "character height in pixels for OCR images (0: default)")
+	flag.StringVar(&f.onnxruntime, "onnxruntime", "", "ONNX Runtime shared library (default: $ONNXRUNTIME_LIB, else libonnxruntime.so)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: %s [flags] photo... | -eval labels.csv\n", os.Args[0])
 		flag.PrintDefaults()
@@ -84,28 +75,6 @@ func main() {
 	}
 }
 
-func (f flags) options() marking.Options {
-	opt := marking.DefaultOptions()
-	opt.OCR.Languages = strings.Split(f.lang, "+")
-	opt.OCR.TessdataPrefix = f.tessdata
-	opt.OCR.PageSegMode = ocr.PageSegMode(f.psm)
-	opt.OCR.Whitelist = f.whitelist
-	opt.Preprocess.Enhance.CharHeight = f.charHeight
-	return opt
-}
-
-func (f flags) newReader() (*marking.Reader, error) {
-	opt := f.options()
-	if !f.useCLI {
-		return marking.NewReader(opt)
-	}
-	e, err := ocr.NewCLIEngine(opt.OCR)
-	if err != nil {
-		return nil, err
-	}
-	return marking.NewReaderWithEngine(e, opt), nil
-}
-
 type outcome struct {
 	path string
 	res  *marking.Result
@@ -113,10 +82,15 @@ type outcome struct {
 	dur  time.Duration
 }
 
-// process reads all paths with a pool of readers, calling done in input
-// order.
+// process reads all paths with f.workers goroutines sharing one reader
+// (one ONNX Runtime thread each), calling done in input order.
 func process(f flags, paths []string, done func(outcome)) error {
 	n := max(1, min(f.workers, len(paths)))
+	r, err := marking.NewReader(marking.Options{OCR: ocr.Config{Library: f.onnxruntime, Threads: 1}})
+	if err != nil {
+		return err
+	}
+	defer r.Close()
 	results := make([]outcome, len(paths))
 	ready := make([]chan struct{}, len(paths))
 	for i := range ready {
@@ -125,15 +99,9 @@ func process(f flags, paths []string, done func(outcome)) error {
 	jobs := make(chan int)
 	var wg sync.WaitGroup
 	for w := 0; w < n; w++ {
-		r, err := f.newReader()
-		if err != nil {
-			close(jobs)
-			return err
-		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			defer r.Close()
 			for i := range jobs {
 				start := time.Now()
 				res, err := readFile(r, paths[i])
@@ -174,9 +142,8 @@ type jsonResult struct {
 	Text       string   `json:"text"`
 	Lines      []string `json:"lines"`
 	Confidence float64  `json:"confidence"`
-	Variant    string   `json:"variant,omitempty"`
+	Reliable   bool     `json:"reliable"`
 	Rotation   int      `json:"rotation"`
-	Polarity   string   `json:"polarity,omitempty"`
 	Millis     int64    `json:"ms"`
 	Error      string   `json:"error,omitempty"`
 }
@@ -204,8 +171,7 @@ func runPhotos(f flags, paths []string) error {
 				jr.Error = o.err.Error()
 			} else {
 				jr.Text, jr.Lines, jr.Confidence = o.res.Text, o.res.Lines, o.res.Confidence
-				jr.Variant, jr.Rotation = o.res.Best.Variant, o.res.Best.Rotation
-				jr.Polarity = o.res.Preprocess.Polarity.String()
+				jr.Reliable, jr.Rotation = o.res.Reliable, o.res.Rotation
 			}
 			enc.Encode(jr)
 			return
@@ -215,11 +181,15 @@ func runPhotos(f flags, paths []string) error {
 			return
 		}
 		r := o.res
-		fmt.Printf("%s: %q (conf %.0f, %s@%d°, %v)\n", o.path, strings.ReplaceAll(r.Text, "\n", " / "),
-			r.Confidence, r.Best.Variant, r.Best.Rotation, o.dur.Round(time.Millisecond))
+		fmt.Printf("%s: %q (confidence %.0f%%, read at %d°, %v)\n", o.path, strings.ReplaceAll(r.Text, "\n", " / "),
+			100*r.Confidence, r.Rotation, o.dur.Round(time.Millisecond))
 		if f.all {
 			for _, c := range r.Candidates {
-				fmt.Printf("    %-10s %3d° score %5.1f  %q\n", c.Variant, c.Rotation, c.Score, strings.ReplaceAll(c.OCR.Text(), "\n", " / "))
+				var texts []string
+				for _, l := range c.Lines {
+					texts = append(texts, fmt.Sprintf("%s (%.0f%%)", l.Text, 100*l.Confidence))
+				}
+				fmt.Printf("    %3d° score %5.1f  %s\n", c.Rotation, c.Score, strings.Join(texts, " / "))
 			}
 		}
 	})
@@ -313,15 +283,9 @@ func writeDebug(dir, path string, r *marking.Result) error {
 	if err := save("1_crop", p.Crop); err != nil {
 		return err
 	}
-	save("2_body", p.BodyMask.ToGray())
-	if p.Text != nil {
-		save("3_text", p.Text.Mask.ToGray())
-	}
-	for _, v := range p.Variants {
-		save("4_var_"+v.Name, v.Image)
-	}
-	if r.Best.Image != nil {
-		save("5_best", r.Best.Image)
+	save("2_upright", r.Upright)
+	if lines := r.LinesImage(); lines != nil {
+		save("3_lines", lines)
 	}
 	if src, err := loadImage(path); err == nil {
 		save("0_detect", overlay(src, p.Rect))

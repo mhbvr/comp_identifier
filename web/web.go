@@ -38,6 +38,7 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"points": points,
 	"label":  label,
 	"ms":     func(d time.Duration) int64 { return d.Milliseconds() },
+	"pct":    func(f float64) float64 { return 100 * f },
 	// searchURL is a free, always valid datasheet link for a part number.
 	"searchURL": func(part string) string {
 		return "https://duckduckgo.com/?q=" + url.QueryEscape(part+" datasheet")

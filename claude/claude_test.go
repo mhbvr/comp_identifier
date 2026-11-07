@@ -82,12 +82,12 @@ func TestIdentifyRefusal(t *testing.T) {
 }
 
 func TestEstimateTokens(t *testing.T) {
-	// 1000x360 shrinks to 512x184: 126 image tokens plus the prompt.
-	if got := EstimateTokens(1000, 360); got != promptTokens+126 {
+	// 1000x360 shrinks to 512x184: 19 x 7 = 133 visual tokens plus the prompt.
+	if got := EstimateTokens(1000, 360); got != promptTokens+133 {
 		t.Errorf("EstimateTokens(1000, 360) = %d", got)
 	}
 	// Small images are not enlarged.
-	if got := EstimateTokens(300, 250); got != promptTokens+100 {
+	if got := EstimateTokens(300, 250); got != promptTokens+11*9 {
 		t.Errorf("EstimateTokens(300, 250) = %d", got)
 	}
 }

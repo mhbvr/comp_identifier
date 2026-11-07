@@ -1,158 +1,205 @@
-// Package ocr wraps a local Tesseract installation behind a small,
-// engine-agnostic interface.
+// Package ocr reads text in an image with PaddleOCR models run by ONNX
+// Runtime, all locally.
 //
-// Two backends are provided:
+// Two neural networks are used, both embedded in the binary:
 //
-//   - LibEngine uses libtesseract in-process through Tesseract's C API
-//     (cgo). It is the default when the package is built with cgo enabled
-//     and needs the Tesseract and Leptonica development files and
-//     pkg-config at build time (Debian/Ubuntu: libtesseract-dev
-//     libleptonica-dev pkg-config).
-//   - CLIEngine runs the `tesseract` executable. It needs no cgo and is
-//     used as the fallback when cgo is disabled.
+//   - a text detector (PP-OCRv3, DB): it outputs, for every pixel, the
+//     probability that it belongs to text; connected regions of that map
+//     become text-line boxes;
+//   - a text recogniser (PP-OCRv5, English): it reads one text line image
+//     and outputs, for each horizontal step, a probability for every
+//     character of its dictionary, decoded with CTC.
 //
-// Both need trained data for the requested language (tesseract-ocr-eng).
+// Both work on the colour image as it is: there is no binarisation step
+// that could destroy faint markings. Why this replaced Tesseract is
+// written up in doc/text-recognition.md.
+//
+// ONNX Runtime itself is a shared library loaded at run time (cgo); see
+// Config.Library.
 package ocr
 
 import (
+	"errors"
+	"fmt"
 	"image"
+	"os"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
+
+	ort "github.com/yalue/onnxruntime_go"
+
+	"github.com/mhbvr/comp_identifier/preprocess"
 )
-
-// PageSegMode mirrors Tesseract's page segmentation modes that are useful
-// for component markings.
-type PageSegMode int
-
-const (
-	PSMAuto        PageSegMode = 3  // fully automatic page segmentation
-	PSMSingleBlock PageSegMode = 6  // a single uniform block of text
-	PSMSingleLine  PageSegMode = 7  // a single text line
-	PSMSparseText  PageSegMode = 11 // as much text as possible, no order
-)
-
-// DefaultWhitelist covers what is printed on IC and transistor packages:
-// upper-case letters, digits and a few separators. Restricting the
-// character set noticeably improves accuracy on short part numbers.
-const DefaultWhitelist = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/.+"
 
 // Config configures an Engine.
 type Config struct {
-	// Languages, default ["eng"].
-	Languages []string
-	// Whitelist of characters; empty disables the whitelist. Use
-	// DefaultWhitelist for component markings.
-	Whitelist string
-	// PageSegMode, default PSMSingleBlock.
-	PageSegMode PageSegMode
-	// TessdataPrefix overrides the tessdata directory if non-empty.
-	TessdataPrefix string
-	// DisableDictionary turns off Tesseract's word lists, which only hurt
-	// on part numbers and date codes. Default true via DefaultConfig.
-	DisableDictionary bool
-	// DPI hint passed to Tesseract (avoids "invalid resolution" guesses).
-	DPI int
-}
-
-// DefaultConfig returns a configuration tuned for component markings.
-func DefaultConfig() Config {
-	return Config{
-		Languages:         []string{"eng"},
-		Whitelist:         DefaultWhitelist,
-		PageSegMode:       PSMSingleBlock,
-		DisableDictionary: true,
-		DPI:               300,
-	}
+	// Library is the path of the ONNX Runtime shared library (version 1.31
+	// or newer), e.g. /opt/onnxruntime/lib/libonnxruntime.so.1.31.0.
+	// Empty: $ONNXRUNTIME_LIB, else "libonnxruntime.so" (.dylib on macOS),
+	// found through the system's library search path.
+	Library string
+	// Threads is the number of threads ONNX Runtime may use per model run.
+	// Zero lets ONNX Runtime decide (all cores). Use 1 when several engines
+	// run in parallel.
+	Threads int
+	// MinConfidence drops text lines whose mean character confidence is
+	// below it, in [0,1]. Default 0.5.
+	MinConfidence float64
 }
 
 func (c Config) withDefaults() Config {
-	if len(c.Languages) == 0 {
-		c.Languages = []string{"eng"}
+	if c.Library == "" {
+		c.Library = os.Getenv("ONNXRUNTIME_LIB")
 	}
-	if c.PageSegMode == 0 {
-		c.PageSegMode = PSMSingleBlock
+	if c.Library == "" {
+		c.Library = "libonnxruntime.so"
+		if runtime.GOOS == "darwin" {
+			c.Library = "libonnxruntime.dylib"
+		}
 	}
-	if c.DPI <= 0 {
-		c.DPI = 300
+	if c.MinConfidence == 0 {
+		c.MinConfidence = 0.5
 	}
 	return c
 }
 
-// Char is a single recognised character.
-type Char struct {
+// Line is one recognised text line.
+type Line struct {
 	Text string
-	// Confidence in [0,100].
+	// Confidence is the mean probability of the line's characters, [0,1].
 	Confidence float64
+	// Box is where the line was found, in the input image's coordinates.
+	Box preprocess.RotatedRect
+	// Image is the line as the recogniser saw it (before resizing).
+	Image *image.RGBA
 }
 
-// Word is a single recognised word.
-type Word struct {
-	Text string
-	// Confidence in [0,100]. For Tesseract's LSTM engine this is close to
-	// the confidence of the worst character, so one doubtful character
-	// zeroes an otherwise good word; see CharConfidence.
-	Confidence float64
-	Box        image.Rectangle
-	// Line identifies the text line the word belongs to; words with equal
-	// Line are on the same line. Lines are numbered in reading order.
-	Line int
-	// Chars holds per-character results when the engine provides them
-	// (LibEngine does, CLIEngine does not).
-	Chars []Char
+// Engine runs the detector and the recogniser. It is safe for concurrent
+// use.
+type Engine struct {
+	cfg  Config
+	det  *ort.DynamicAdvancedSession
+	rec  *ort.DynamicAdvancedSession
+	dict []string // index 0 is the CTC blank
 }
 
-// CharConfidence returns the mean per-character confidence, falling back
-// to the word confidence when character data is unavailable.
-func (w Word) CharConfidence() float64 {
-	if len(w.Chars) == 0 {
-		return w.Confidence
-	}
-	var s float64
-	for _, c := range w.Chars {
-		s += c.Confidence
-	}
-	return s / float64(len(w.Chars))
-}
+var (
+	initOnce sync.Once
+	initErr  error
+)
 
-// Result is the output of one OCR pass over one image.
-type Result struct {
-	Words []Word
-}
-
-// Lines groups words into text lines in reading order.
-func (r *Result) Lines() []string {
-	byLine := map[int][]Word{}
-	var keys []int
-	for _, w := range r.Words {
-		if _, ok := byLine[w.Line]; !ok {
-			keys = append(keys, w.Line)
+// initRuntime loads ONNX Runtime once per process; the library cannot be
+// changed afterwards.
+func initRuntime(library string) error {
+	initOnce.Do(func() {
+		ort.SetSharedLibraryPath(library)
+		if err := ort.InitializeEnvironment(); err != nil {
+			initErr = fmt.Errorf("ocr: cannot load ONNX Runtime %q (install ONNX Runtime 1.31+ and set -onnxruntime or $ONNXRUNTIME_LIB): %w", library, err)
 		}
-		byLine[w.Line] = append(byLine[w.Line], w)
+	})
+	return initErr
+}
+
+// NewEngine loads ONNX Runtime and the embedded models.
+func NewEngine(cfg Config) (*Engine, error) {
+	cfg = cfg.withDefaults()
+	if err := initRuntime(cfg.Library); err != nil {
+		return nil, err
 	}
-	sort.Ints(keys)
-	out := make([]string, 0, len(keys))
-	for _, k := range keys {
-		ws := byLine[k]
-		sort.SliceStable(ws, func(i, j int) bool { return ws[i].Box.Min.X < ws[j].Box.Min.X })
-		parts := make([]string, len(ws))
-		for i, w := range ws {
-			parts[i] = w.Text
+	opts, err := ort.NewSessionOptions()
+	if err != nil {
+		return nil, err
+	}
+	defer opts.Destroy()
+	if cfg.Threads > 0 {
+		if err := opts.SetIntraOpNumThreads(cfg.Threads); err != nil {
+			return nil, err
 		}
-		out = append(out, strings.Join(parts, " "))
+		if err := opts.SetInterOpNumThreads(1); err != nil {
+			return nil, err
+		}
 	}
-	return out
+	e := &Engine{cfg: cfg, dict: loadDict(dictText)}
+	if e.det, err = newSession(detModel, opts); err != nil {
+		return nil, fmt.Errorf("ocr: detector: %w", err)
+	}
+	if e.rec, err = newSession(recModel, opts); err != nil {
+		e.Close()
+		return nil, fmt.Errorf("ocr: recogniser: %w", err)
+	}
+	return e, nil
 }
 
-// Text returns all lines joined by newlines.
-func (r *Result) Text() string { return strings.Join(r.Lines(), "\n") }
-
-// Engine recognises text in an image. Implementations are not safe for
-// concurrent use; create one engine per goroutine.
-type Engine interface {
-	Recognize(img image.Image) (*Result, error)
-	Close() error
+func newSession(model []byte, opts *ort.SessionOptions) (*ort.DynamicAdvancedSession, error) {
+	in, out, err := ort.GetInputOutputInfoWithONNXData(model)
+	if err != nil {
+		return nil, err
+	}
+	if len(in) != 1 || len(out) != 1 {
+		return nil, errors.New("model must have one input and one output")
+	}
+	return ort.NewDynamicAdvancedSessionWithONNXData(model, []string{in[0].Name}, []string{out[0].Name}, opts)
 }
 
-// lineKey builds a unique, ordered line number from Tesseract's
-// block/paragraph/line hierarchy.
-func lineKey(block, par, line int) int { return block*1_000_000 + par*1_000 + line }
+// loadDict builds the recogniser's class list: CTC blank, the dictionary,
+// and a space (the models are trained with use_space_char).
+func loadDict(text string) []string {
+	chars := []string{""}
+	for _, l := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		chars = append(chars, strings.TrimRight(l, "\r"))
+	}
+	return append(chars, " ")
+}
+
+// Close releases the models.
+func (e *Engine) Close() error {
+	if e.det != nil {
+		e.det.Destroy()
+		e.det = nil
+	}
+	if e.rec != nil {
+		e.rec.Destroy()
+		e.rec = nil
+	}
+	return nil
+}
+
+// Recognize finds and reads the text lines in img, in reading order (top
+// to bottom, then left to right). Lines below Config.MinConfidence are
+// dropped.
+func (e *Engine) Recognize(img image.Image) ([]Line, error) {
+	src := toRGBA(img)
+	boxes, err := e.detect(src)
+	if err != nil {
+		return nil, err
+	}
+	var lines []Line
+	for _, box := range boxes {
+		lineImg := preprocess.ExtractRect(src, box, 1)
+		text, conf, err := e.recognize(lineImg)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(text) == "" || conf < e.cfg.MinConfidence {
+			continue
+		}
+		lines = append(lines, Line{Text: strings.TrimSpace(text), Confidence: conf, Box: box, Image: lineImg})
+	}
+	sortReadingOrder(lines)
+	return lines, nil
+}
+
+// sortReadingOrder sorts lines top to bottom; lines whose tops are within
+// half a line height of each other are ordered left to right.
+func sortReadingOrder(lines []Line) {
+	top := func(l Line) float64 { return l.Box.Center.Y - l.Box.H/2 }
+	sort.SliceStable(lines, func(i, j int) bool {
+		a, b := lines[i], lines[j]
+		if d := top(a) - top(b); d < -a.Box.H/2 || d > a.Box.H/2 {
+			return d < 0
+		}
+		return a.Box.Center.X < b.Box.Center.X
+	})
+}
