@@ -4,8 +4,10 @@ Identify electronic components (ICs, MOSFETs, BJTs, regulators, …) from photos
 
 It reads the **marking text** on a component lying on a white background, either
 from photos (`compid`) or live under a camera in a web app (`compweb`). It's
-written in Go and runs fully locally (Tesseract OCR). There is no component
-database yet: the result is the text on the part.
+written in Go and runs locally (Tesseract OCR). There is no component database
+yet: the result is the text on the part. On request, the web app can also ask
+the Claude API to identify the part (canonical part number, manufacturer,
+description, datasheet link).
 
 ```
 photo ──► segment ──► rotate + crop ──► enhance ──► OCR × 4 orientations ──► best text
@@ -19,6 +21,7 @@ photo ──► segment ──► rotate + crop ──► enhance ──► OCR 
 | `camera` | client for the [camera_rpi](https://github.com/mhbvr/camera_rpi) REST API: MJPEG stream and captures (read-only) | — |
 | `tracker` | watches the stream: detects a placed / moved / removed component, recognises it | — |
 | `web` | the web UI: `html/template` pages, MJPEG relay | — |
+| `claude` | optional identification with the Claude API, sized for few tokens | Anthropic Go SDK |
 | `cmd/compweb` | the web app | — |
 | `cmd/compid` | command-line tool, debug image dump, accuracy evaluation | — |
 | `cmd/photocam` | fake camera serving photos, for developing `compweb` without a Pi | — |
@@ -28,6 +31,8 @@ photo ──► segment ──► rotate + crop ──► enhance ──► OCR 
 ```bash
 sudo apt-get install -y tesseract-ocr tesseract-ocr-eng libtesseract-dev libleptonica-dev pkg-config
 ```
+
+Go 1.25 or newer is needed (the Anthropic Go SDK requires it).
 
 ```bash
 go build ./cmd/compid ./cmd/compweb
@@ -66,7 +71,42 @@ How it works:
 - **Read-only.** Camera settings are never changed. `-capture=false` recognises stream frames instead of
   captures. `-camera-ca certs/ca.crt` trusts camera_rpi's own CA for an `https://` camera.
 - **The page** is two `html/template` templates. A few lines of inline JavaScript re-fetch the dynamic part
-  (`/panel`: the SVG rectangle and the result panel) every 300 ms. There are no third-party dependencies.
+  (`/panel`: the SVG rectangle and the result panel) every 300 ms, and send the Claude request. No
+  third-party front-end dependencies.
+
+### Identify with Claude
+
+For the component on screen, press **Identify with Claude** or the **i** key. Nothing is sent to Claude
+without that. The panel then shows Claude's canonical part number, manufacturer, description, the marking as
+Claude read it, a datasheet link and the tokens used. Each reading is sent at most once; if the request
+fails, you can retry it.
+
+Credentials come from `ANTHROPIC_API_KEY` or a profile from `ant auth login`. `-claude=false` hides the
+button. `-claude-model` picks the model; the default is `claude-opus-5-5`.
+
+**Tokens per identification.** These are estimates: they haven't been measured against the real API yet. The
+page shows the estimate before you send, and the actual usage after.
+
+| part | tokens | how it is kept small |
+|---|---|---|
+| image | ≤ ~260 | the upright colour crop scaled to fit 512×384 and sent as JPEG; images cost about width×height/750 tokens |
+| system prompt, JSON schema, OCR hint | ~350 | a four-sentence prompt; the local OCR text as a one-line hint |
+| output | ~100 JSON + thinking | schema-constrained JSON with no prose, at `effort: low` |
+
+That is roughly 500–650 input and 150–400 output tokens per part: about $0.005–0.01 on Claude Opus 5.5 at
+$4 / $20 per million tokens. `-claude-model claude-haiku-5-5` uses about the same number of tokens at a
+fraction of the price, if its readings are good enough for you.
+
+Choices behind those numbers:
+- **The image is the colour crop, not the OCR image.** The logo and package shape help identify the part,
+  and at 512×384 the marking stays legible.
+- **No web search.** Search results would add thousands of input tokens per part. The datasheet URL comes
+  from Claude's knowledge and is left empty when Claude isn't sure, so treat it as unverified. A free
+  search link built from the part number is always shown.
+- **No prompt caching.** The fixed part of the request is far below the minimum cacheable prefix, so caching
+  would not save anything.
+- **Refusal fallback on.** If a safety classifier declines, the server retries on its default fallback model
+  (`fallbacks: "default"`); the panel shows which model answered.
 
 Without a Pi, the fake camera shows each photo for 8 s, then empty paper for 3 s, in a loop:
 

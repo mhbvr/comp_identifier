@@ -10,6 +10,7 @@
 <section id="result">
   <p class="status {{.Status}}">{{label .Status}}</p>
   {{with .Current}}{{template "reading" .}}{{end}}
+  {{with .Claude}}{{template "claude" .}}{{end}}
   {{with .Err}}<p class="error">{{.}}</p>{{end}}
 </section>
 {{end}}
@@ -29,4 +30,26 @@
   {{.Attempts}} attempt{{if gt .Attempts 1}}s{{end}} ·
   {{ms .Elapsed}} ms · {{.Variant}} at {{.Rotation}}°
 </p>
+{{end}}
+
+{{define "claude"}}
+<div class="claude">
+  {{with .Result}}
+  <h2>Claude: {{.PartNumber}}</h2>
+  <p>{{.Manufacturer}} · {{.Description}}</p>
+  <p class="meta">marking as read by Claude: {{.Marking}}</p>
+  <p>
+    {{if .DatasheetURL}}<a href="{{.DatasheetURL}}" target="_blank" rel="noopener">datasheet</a>
+    <span class="meta">(from Claude's knowledge, not checked)</span> ·{{end}}
+    <a href="{{searchURL .PartNumber}}" target="_blank" rel="noopener">search datasheet</a>
+  </p>
+  <p class="meta">confidence {{.Confidence}} · {{.InputTokens}} input + {{.OutputTokens}} output tokens · {{.Model}}</p>
+  {{else}}
+  <button id="claude-btn" data-id="{{.ID}}" onclick="askClaude()" {{if .Busy}}disabled{{end}}>
+    {{if .Busy}}Asking Claude…{{else}}Identify with Claude{{end}}
+  </button>
+  <p class="meta">key <kbd>i</kbd> · about {{.Estimate}} input tokens · {{.Model}}</p>
+  {{with .Err}}<p class="error">{{.}}</p>{{end}}
+  {{end}}
+</div>
 {{end}}
