@@ -93,7 +93,7 @@ type Reading struct {
 	Rotation   int
 	Elapsed    time.Duration // time spent recognising, all attempts
 	At         time.Time
-	CropPNG    []byte // aligned colour crop of the component
+	CropPNG    []byte // colour crop of the component, turned so the text reads upright
 	OCRPNG     []byte // the image the winning text was read from
 }
 
@@ -337,7 +337,8 @@ func newReading(c *component) *Reading {
 		Reliable: c.reliable, Attempts: c.attempts,
 		Variant: res.Best.Variant, Rotation: res.Best.Rotation,
 		Elapsed: c.elapsed, At: time.Now(),
-		CropPNG: encodePNG(res.Preprocess.Crop), OCRPNG: encodePNG(res.Best.Image),
+		CropPNG: encodePNG(preprocess.RotateRGBA(res.Preprocess.Crop, res.Best.Rotation/90)),
+		OCRPNG:  encodePNG(res.Best.Image),
 	}
 }
 

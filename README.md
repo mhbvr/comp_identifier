@@ -48,9 +48,10 @@ Open `http://localhost:8090`. The page shows the live camera view with a rectang
 - **green**: the text was read with high confidence;
 - **red**: the text was read, but with low confidence.
 
-Next to the video it shows the recognised text and the two images it came from: the aligned crop of the
-component and the OCR input. Take the component away and put the next one down; earlier readings are listed
-under *Previous components*.
+Next to the video, top to bottom: the crop of the component turned so its text reads upright, the image the
+text was read from, the recognised text, then the confidence and details (attempts, time, variant,
+rotation). Take the component away and put the next one down; earlier readings are listed under *Previous
+components*.
 
 How it works:
 - **Live view.** `compweb` reads the camera's `/stream.mjpeg` once and relays the frames unchanged to every

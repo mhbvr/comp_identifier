@@ -75,24 +75,34 @@ func bilinear(s *image.RGBA, w, h int, x, y float64, dst []uint8) {
 
 // RotateGray rotates g clockwise by quarterTurns * 90 degrees.
 func RotateGray(g *image.Gray, quarterTurns int) *image.Gray {
-	q := ((quarterTurns % 4) + 4) % 4
 	w, h := g.Rect.Dx(), g.Rect.Dy()
-	if q == 0 {
-		out := image.NewGray(image.Rect(0, 0, w, h))
-		for y := 0; y < h; y++ {
-			copy(out.Pix[y*out.Stride:y*out.Stride+w], g.Pix[g.PixOffset(g.Rect.Min.X, g.Rect.Min.Y+y):])
-		}
-		return out
+	out := image.NewGray(rotatedBounds(w, h, quarterTurns))
+	rotatePix(out.Pix, out.Stride, g.Pix[g.PixOffset(g.Rect.Min.X, g.Rect.Min.Y):], g.Stride, w, h, 1, quarterTurns)
+	return out
+}
+
+// RotateRGBA rotates img clockwise by quarterTurns * 90 degrees.
+func RotateRGBA(img *image.RGBA, quarterTurns int) *image.RGBA {
+	w, h := img.Rect.Dx(), img.Rect.Dy()
+	out := image.NewRGBA(rotatedBounds(w, h, quarterTurns))
+	rotatePix(out.Pix, out.Stride, img.Pix[img.PixOffset(img.Rect.Min.X, img.Rect.Min.Y):], img.Stride, w, h, 4, quarterTurns)
+	return out
+}
+
+func rotatedBounds(w, h, quarterTurns int) image.Rectangle {
+	if quarterTurns%2 != 0 {
+		w, h = h, w
 	}
-	ow, oh := w, h
-	if q%2 == 1 {
-		ow, oh = h, w
-	}
-	out := image.NewGray(image.Rect(0, 0, ow, oh))
+	return image.Rect(0, 0, w, h)
+}
+
+// rotatePix copies a w x h image of bpp bytes per pixel from src to dst,
+// rotated clockwise by quarterTurns * 90 degrees.
+func rotatePix(dst []uint8, dstStride int, src []uint8, srcStride, w, h, bpp, quarterTurns int) {
+	q := (quarterTurns%4 + 4) % 4
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
-			v := g.Pix[g.PixOffset(g.Rect.Min.X+x, g.Rect.Min.Y+y)]
-			var nx, ny int
+			nx, ny := x, y
 			switch q {
 			case 1: // 90° clockwise
 				nx, ny = h-1-y, x
@@ -101,8 +111,7 @@ func RotateGray(g *image.Gray, quarterTurns int) *image.Gray {
 			case 3: // 90° counter-clockwise
 				nx, ny = y, w-1-x
 			}
-			out.Pix[ny*out.Stride+nx] = v
+			copy(dst[ny*dstStride+nx*bpp:][:bpp], src[y*srcStride+x*bpp:][:bpp])
 		}
 	}
-	return out
 }
