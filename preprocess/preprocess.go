@@ -32,7 +32,7 @@ type Options struct {
 	// counts as a component. Default 0.004.
 	MinArea float64
 	// Margin enlarges the detected rectangle on every side by this fraction
-	// of its short side. Default 0.04.
+	// of its short side. Default 0.10.
 	Margin float64
 	// TargetHeight is the height (short side) of the aligned crop in pixels.
 	// Default 360.
@@ -49,7 +49,7 @@ func (o Options) withDefaults() Options {
 		o.MinArea = 0.004
 	}
 	if o.Margin == 0 {
-		o.Margin = 0.04
+		o.Margin = 0.10
 	}
 	if o.TargetHeight <= 0 {
 		o.TargetHeight = 360

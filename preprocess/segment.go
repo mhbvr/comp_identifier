@@ -107,8 +107,10 @@ func Segment(img image.Image, opt Options) (*Segmentation, error) {
 	if best == nil || best.Area < 50 {
 		return nil, ErrNoComponent
 	}
-	body := keepLabel(labels, w, h, best.Label)
-	body = fillHoles(body)
+	body := fillHoles(keepLabel(labels, w, h, best.Label))
+	if core := darkCore(fg, body, short); core != nil {
+		body = core
+	}
 
 	// Remove thin protrusions (leads, which may be dark when tarnished)
 	// with an opening scaled to the blob size, then keep the largest part.
@@ -128,6 +130,32 @@ func Segment(img image.Image, opt Options) (*Segmentation, error) {
 	hull := convexHull(maskBoundary(body))
 	rect := minAreaRect(hull).Landscape().Scale(scale)
 	return &Segmentation{Rect: rect, Area: area, Mask: body, Foreground: fg, Scale: scale, Threshold: t}, nil
+}
+
+// darkCore removes a shadow merged with the body. A strong shadow can pass
+// the threshold and join the body into one blob, which skews the fitted
+// rectangle. It is lighter than the package, so the blob is split once more
+// by Otsu over its own pixels and the dark core is kept, with gaps closed
+// and holes (the marking) filled. Without a shadow the core is the whole
+// body. If the core covers less than 60% of the blob (a glare-washed or
+// light-coloured package) it returns nil and the blob is kept as it is.
+func darkCore(fg *Plane, blob *Mask, short int) *Mask {
+	t := otsuMasked(fg, blob)
+	core := NewMask(blob.W, blob.H)
+	for i, in := range blob.Pix {
+		core.Pix[i] = in && fg.Pix[i] > t
+	}
+	core = closeM(core, max(1, short/100))
+	labels, comps := components(core)
+	best := largest(comps, 0)
+	if best == nil {
+		return nil
+	}
+	core = fillHoles(keepLabel(labels, core.W, core.H, best.Label))
+	if core.Count() < blob.Count()*6/10 {
+		return nil
+	}
+	return core
 }
 
 func largest(comps []component, minArea int) *component {
