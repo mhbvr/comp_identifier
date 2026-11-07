@@ -11,32 +11,22 @@
   <p class="status {{.Status}}">{{label .Status}}</p>
   {{with .Current}}{{template "reading" .}}{{end}}
   {{with .Err}}<p class="error">{{.}}</p>{{end}}
-  {{if .History}}
-  <h2>Previous components</h2>
-  <ol>
-    {{range .History}}
-    <li class="{{if .Reliable}}reliable{{else}}unreliable{{end}}" title="confidence {{printf "%.0f" .Confidence}}">
-      {{if .Text}}{{range $i, $l := .Lines}}{{if $i}} / {{end}}{{$l}}{{end}}{{else}}(no text){{end}}
-    </li>
-    {{end}}
-  </ol>
-  {{end}}
 </section>
 {{end}}
 
 {{define "reading"}}
+<figure>
+  <img src="/img/{{.ID}}/crop.png?a={{.Attempts}}" alt="component crop">
+  <figcaption>Component, turned so the text reads upright</figcaption>
+</figure>
+<figure>
+  <img src="/img/{{.ID}}/ocr.png?a={{.Attempts}}" alt="OCR input">
+  <figcaption>Image the text was read from</figcaption>
+</figure>
 <p class="text">{{if .Text}}{{.Text}}{{else}}(no text found){{end}}</p>
 <p class="meta">
   confidence {{printf "%.0f" .Confidence}} ·
   {{.Attempts}} attempt{{if gt .Attempts 1}}s{{end}} ·
   {{ms .Elapsed}} ms · {{.Variant}} at {{.Rotation}}°
 </p>
-<figure>
-  <img src="/img/{{.ID}}/crop.png?a={{.Attempts}}" alt="aligned crop">
-  <figcaption>Aligned crop of the component</figcaption>
-</figure>
-<figure>
-  <img src="/img/{{.ID}}/ocr.png?a={{.Attempts}}" alt="OCR input">
-  <figcaption>Image the text was read from</figcaption>
-</figure>
 {{end}}

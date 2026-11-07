@@ -105,6 +105,19 @@ func TestRotateGray(t *testing.T) {
 	}
 }
 
+func TestRotateRGBA(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 2, 1))
+	img.SetRGBA(0, 0, color.RGBA{1, 2, 3, 255})
+	img.SetRGBA(1, 0, color.RGBA{4, 5, 6, 255})
+	r := RotateRGBA(img, 1) // 90° clockwise: left pixel ends up on top
+	if r.Rect.Dx() != 1 || r.Rect.Dy() != 2 {
+		t.Fatalf("size %v", r.Rect)
+	}
+	if r.RGBAAt(0, 0).R != 1 || r.RGBAAt(0, 1).R != 4 {
+		t.Errorf("got %v %v", r.RGBAAt(0, 0), r.RGBAAt(0, 1))
+	}
+}
+
 func TestPolarityString(t *testing.T) {
 	if LightOnDark.String() != "light-on-dark" || DarkOnLight.String() != "dark-on-light" {
 		t.Error("unexpected polarity names")

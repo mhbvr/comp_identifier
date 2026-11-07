@@ -117,10 +117,11 @@ func TestReliableReadingStopsAfterOneAttempt(t *testing.T) {
 		t.Errorf("recognised %d times, want 1", n)
 	}
 
-	// Remove it: back to empty, reading moves to the history.
+	// Remove it: back to empty, the reading is gone.
+	id := s.Current.ID
 	cam.show(scene(false, 0))
 	s = waitFor(t, tr, "removed", func(s Snapshot) bool { return s.Status == Empty })
-	if len(s.History) != 1 || s.History[0].Text != "LM35" || s.Rect != nil || s.Current != nil {
+	if s.Rect != nil || s.Current != nil || tr.Image(id, "crop") != nil {
 		t.Fatalf("after removal: %+v", s)
 	}
 }
@@ -144,11 +145,11 @@ func TestMovedComponentIsRecognisedAgain(t *testing.T) {
 	first := waitFor(t, tr, "first reading", func(s Snapshot) bool { return s.Status == Reliable })
 
 	cam.show(scene(true, 190)) // replaced / moved far
-	s := waitFor(t, tr, "second reading", func(s Snapshot) bool {
+	waitFor(t, tr, "second reading", func(s Snapshot) bool {
 		return s.Status == Reliable && s.Current != nil && s.Current.ID != first.Current.ID
 	})
-	if len(s.History) != 1 || rec.calls.Load() != 2 {
-		t.Errorf("history %d entries, %d recognitions; want 1 and 2", len(s.History), rec.calls.Load())
+	if n := rec.calls.Load(); n != 2 {
+		t.Errorf("%d recognitions, want 2", n)
 	}
 }
 
