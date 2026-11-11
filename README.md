@@ -97,6 +97,9 @@ compdb/datasheets/     datasheets (file names in components.datasheet)
   add items by hand, delete. When adding a component by hand, **Ask Claude** fills in the
   description (and a datasheet URL if Claude knows one) from the name, with no photo, and offers
   Claude's canonical part number as the name.
+- **Export as Markdown** (Components tab, `/inventory/export.md`) downloads `components.md`: a
+  table of ID, name and description of every component (or of those found by the current search),
+  easy to read or to give to an AI assistant. Items, photos and datasheets are left out.
 
 **Identify with Claude:** press the button or the **i** key. It costs about 600 input tokens per
 part; nothing is sent without your request. Credentials come from `ANTHROPIC_API_KEY` or `ant auth

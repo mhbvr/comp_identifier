@@ -25,6 +25,7 @@ import (
 //	GET  /inventory                        components (search: ?q=), form to add one
 //	POST /inventory/components             add a component (and fetch datasheet_url)
 //	POST /inventory/describe               ask Claude about a part number (JSON)
+//	GET  /inventory/export.md              components as a Markdown table (search: ?q=)
 //	GET  /inventory/components/{id}        a component and its items
 //	POST /inventory/components/{id}        edit name, description, upload a datasheet
 //	POST /inventory/components/{id}/delete delete it with its items
@@ -42,6 +43,7 @@ func (s *Server) inventoryRoutes() {
 	s.mux.HandleFunc("GET /inventory", s.componentsPage)
 	s.mux.HandleFunc("POST /inventory/components", s.createComponent)
 	s.mux.HandleFunc("POST /inventory/describe", s.describeComponent)
+	s.mux.HandleFunc("GET /inventory/export.md", s.exportComponents)
 	s.mux.HandleFunc("GET /inventory/components/{id}", s.componentPage)
 	s.mux.HandleFunc("POST /inventory/components/{id}", s.editComponent)
 	s.mux.HandleFunc("POST /inventory/components/{id}/delete", s.deleteComponent)
@@ -174,6 +176,22 @@ func (s *Server) createComponent(w http.ResponseWriter, r *http.Request) {
 		go s.fetchDatasheet(id, u)
 	}
 	back(w, r, componentURL(id), err)
+}
+
+// exportComponents downloads the components (those matching ?q= when
+// searching) as a Markdown table of ID, name and description.
+func (s *Server) exportComponents(w http.ResponseWriter, r *http.Request) {
+	comps, err := s.inv.Components(r.FormValue("q"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="components.md"`)
+	w.Header().Set("Cache-Control", "no-store")
+	if err := inventory.WriteMarkdown(w, comps); err != nil {
+		log.Printf("export: %v", err)
+	}
 }
 
 // describeComponent asks Claude about the part number in the form value

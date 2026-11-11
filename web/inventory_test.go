@@ -366,3 +366,35 @@ func TestDescribeComponent(t *testing.T) {
 		t.Error("text box for Claude without Claude")
 	}
 }
+
+func TestExportComponents(t *testing.T) {
+	inv := openDB(t)
+	a, _ := inv.AddComponent(inventory.Component{Name: "TL072IP", Description: "dual op-amp"})
+	b, _ := inv.AddComponent(inventory.Component{Name: "NE555P", Description: "timer"})
+	inv.AddItem(inventory.Component{ID: a}, "TL072IP", nil)
+	srv := httptest.NewServer(New(tracker.New(tracker.Config{}, nil, nil, nil), &camera.Latest{}, nil, inv))
+	defer srv.Close()
+
+	if _, page := get(t, srv.URL+"/inventory"); !strings.Contains(page, `href="/inventory/export.md"`) {
+		t.Error("no export link")
+	}
+	if _, page := get(t, srv.URL+"/inventory?q=timer"); !strings.Contains(page, `href="/inventory/export.md?q=timer"`) {
+		t.Error("export link ignores the search")
+	}
+	resp, err := http.Get(srv.URL + "/inventory/export.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/markdown") || !strings.Contains(resp.Header.Get("Content-Disposition"), "components.md") {
+		t.Errorf("headers: %q, %q", ct, resp.Header.Get("Content-Disposition"))
+	}
+	want := fmt.Sprintf("| %d | TL072IP | dual op-amp |\n| %d | NE555P | timer |\n", a, b)
+	if !strings.HasSuffix(string(body), want) {
+		t.Errorf("export:\n%s", body)
+	}
+	if _, body := get(t, srv.URL+"/inventory/export.md?q=timer"); strings.Contains(body, "TL072IP") || !strings.Contains(body, "NE555P") {
+		t.Errorf("filtered export:\n%s", body)
+	}
+}

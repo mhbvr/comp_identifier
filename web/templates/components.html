@@ -8,6 +8,8 @@
     <input type="search" name="q" value="{{.Query}}" placeholder="Search name or description" autofocus>
     <button>Search</button>
     {{if .Query}}<a href="/inventory">show all</a>{{end}}
+    {{if .Components}}<a class="export" href="/inventory/export.md{{with .Query}}?q={{.}}{{end}}" download
+      title="ID, name and description of {{if .Query}}the components found{{else}}all components{{end}}, as a Markdown table">Export as Markdown</a>{{end}}
   </form>
   {{with .Err}}<p class="error">{{.}}</p>{{end}}
 
@@ -92,6 +94,7 @@
   h2 { font-size: 1.1rem; margin: 0 0 .6rem; }
   .search { display: flex; gap: .5rem; align-items: center; margin-bottom: .6rem; }
   .search input { flex: 1; max-width: 28rem; }
+  .search .export { margin-left: auto; }
   table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 6px; overflow: hidden; }
   th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
   th { font-size: .8rem; color: var(--muted); font-weight: 600; background: #fafafa; }
