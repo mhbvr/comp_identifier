@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"image"
 	"io"
@@ -250,5 +251,118 @@ func TestInventoryPages(t *testing.T) {
 	postForm(t, srv.URL+loc+"/delete", nil)
 	if code, _ := get(t, srv.URL+loc); code != 404 {
 		t.Errorf("deleted component: %d", code)
+	}
+}
+
+// fakeClaude is a Claude API that answers every request with answer (the
+// JSON the model would write) and records the requests' user content.
+func fakeClaude(t *testing.T, answer string) (*claude.Identifier, *atomic.Value, *atomic.Int32) {
+	t.Helper()
+	var last atomic.Value
+	var calls atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		last.Store(string(body))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"id":"m","type":"message","role":"assistant","model":"claude-opus-5-5","stop_reason":"end_turn",
+		 "content":[{"type":"text","text":%q}],"usage":{"input_tokens":300,"output_tokens":80}}`, answer)
+	}))
+	t.Cleanup(api.Close)
+	return claude.New("", option.WithBaseURL(api.URL), option.WithAPIKey("test")), &last, &calls
+}
+
+// TestClaudeWithUserText: text typed for Claude goes with the photo; asking
+// again with the same text sends nothing, with another text a new request.
+func TestClaudeWithUserText(t *testing.T) {
+	id, last, calls := fakeClaude(t, `{"marking":"470uF 25V","part_number":"EEU-FR1E471","manufacturer":"Panasonic","description":"electrolytic capacitor 470 uF 25 V, radial","datasheet_url":"","confidence":"medium"}`)
+	srv, tr := trackedServer(t, "", id, openDB(t))
+	if _, page := get(t, srv.URL+"/"); !strings.Contains(page, `id="note-text"`) {
+		t.Fatal("no text box for Claude")
+	}
+	waitPanel(t, srv.URL, "Identify with Claude")
+	u := fmt.Sprintf("%s/claude/%d", srv.URL, tr.Snapshot().Current.ID)
+	ask := func(text string) int { return postForm(t, u, url.Values{"text": {text}}).StatusCode }
+
+	if code := ask(" 470uF 25V "); code != http.StatusAccepted {
+		t.Fatalf("ask: %d", code)
+	}
+	panel := waitPanel(t, srv.URL, "Claude: EEU-FR1E471")
+	if !strings.Contains(panel, "with your text: <span class=\"mono\">470uF 25V</span>") {
+		t.Errorf("panel does not show the text sent: %s", panel)
+	}
+	if req := last.Load().(string); !strings.Contains(req, "Text the user read on the part: 470uF 25V") {
+		t.Errorf("request lacks the user's text: %s", req)
+	}
+	if code := ask("470uF 25V"); code != http.StatusNoContent || calls.Load() != 1 {
+		t.Errorf("same text again: %d, %d calls", code, calls.Load())
+	}
+	if code := ask("470uF 35V"); code != http.StatusAccepted {
+		t.Errorf("new text: %d", code)
+	}
+	// The new request replaced the old answer before POST returned, so the
+	// next answer shown is the new one.
+	panel = waitPanel(t, srv.URL, "Claude: EEU-FR1E471")
+	if !strings.Contains(panel, "470uF 35V</span>") || calls.Load() != 2 {
+		t.Errorf("%d calls, want 2; panel: %s", calls.Load(), panel)
+	}
+	if code := ask(strings.Repeat("x", maxUserText+1)); code != http.StatusBadRequest {
+		t.Errorf("text too long: %d", code)
+	}
+}
+
+// TestDescribeComponent: "Ask Claude" on the new-component form, and the
+// datasheet URL it fills in is downloaded after the component is added.
+func TestDescribeComponent(t *testing.T) {
+	ds := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "%PDF-1.4 NE555")
+	}))
+	defer ds.Close()
+	id, last, _ := fakeClaude(t, fmt.Sprintf(`{"part_number":"NE555P","manufacturer":"Texas Instruments","description":"precision timer, DIP-8","datasheet_url":"%s/ne555.pdf","confidence":"high"}`, ds.URL))
+	inv := openDB(t)
+	srv := httptest.NewServer(New(tracker.New(tracker.Config{}, nil, nil, nil), &camera.Latest{}, id, inv))
+	defer srv.Close()
+
+	if _, page := get(t, srv.URL+"/inventory"); !strings.Contains(page, `id="ask-claude"`) {
+		t.Error("no Ask Claude button")
+	}
+	resp, err := http.PostForm(srv.URL+"/inventory/describe", url.Values{"name": {"ne555"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a map[string]any
+	json.NewDecoder(resp.Body).Decode(&a)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || a["part_number"] != "NE555P" || a["description"] != "precision timer, DIP-8 (Texas Instruments)" || a["datasheet_url"] != ds.URL+"/ne555.pdf" {
+		t.Errorf("describe: %d %v", resp.StatusCode, a)
+	}
+	if req := last.Load().(string); !strings.Contains(req, "Part number: ne555") {
+		t.Errorf("request: %s", req)
+	}
+
+	postForm(t, srv.URL+"/inventory/components", url.Values{"name": {"NE555P"}, "description": {a["description"].(string)}, "datasheet_url": {ds.URL + "/ne555.pdf"}})
+	c, err := inv.ComponentByName("NE555P")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200 && c.Datasheet == ""; i++ {
+		time.Sleep(10 * time.Millisecond)
+		c, _ = inv.Component(c.ID)
+	}
+	if data, err := os.ReadFile(filepath.Join(inv.DatasheetsDir(), c.Datasheet)); err != nil || string(data) != "%PDF-1.4 NE555" {
+		t.Errorf("datasheet %q: %v", c.Datasheet, err)
+	}
+
+	// Without Claude: no button, and the endpoint says so.
+	srv2 := httptest.NewServer(New(tracker.New(tracker.Config{}, nil, nil, nil), &camera.Latest{}, nil, inv))
+	defer srv2.Close()
+	if _, page := get(t, srv2.URL+"/inventory"); strings.Contains(page, `id="ask-claude"`) {
+		t.Error("Ask Claude button without Claude")
+	}
+	if code := postForm(t, srv2.URL+"/inventory/describe", url.Values{"name": {"x"}}).StatusCode; code != http.StatusNotFound {
+		t.Errorf("describe without Claude: %d", code)
+	}
+	if _, page := get(t, srv2.URL+"/"); strings.Contains(page, `id="note-text"`) {
+		t.Error("text box for Claude without Claude")
 	}
 }

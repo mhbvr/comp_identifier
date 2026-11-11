@@ -7,7 +7,7 @@
 {{end}}
 
 {{define "result"}}
-<section id="result">
+<section id="result" data-reading="{{with .Current}}{{.ID}}{{end}}">
   <p class="status {{.Status}}">{{label .Status}}</p>
   {{with .Current}}{{template "reading" .}}{{end}}
   {{with .Inventory}}{{template "inventory" .}}{{end}}
@@ -39,6 +39,7 @@
   <h2>Claude: {{.PartNumber}}</h2>
   <p>{{.Manufacturer}} · {{.Description}}</p>
   <p class="meta">marking as read by Claude: {{.Marking}}</p>
+  {{with $.Text}}<p class="meta">with your text: <span class="mono">{{.}}</span></p>{{end}}
   <p>
     {{if .DatasheetURL}}<a href="{{.DatasheetURL}}" target="_blank" rel="noopener">datasheet</a>
     <span class="meta">(from Claude's knowledge, not checked)</span> ·{{end}}
@@ -50,6 +51,7 @@
     {{if .Busy}}Asking Claude…{{else}}Identify with Claude{{end}}
   </button>
   <p class="meta">key <kbd>i</kbd> · about {{.Estimate}} input tokens · {{.Model}}</p>
+  {{if and .Busy .Text}}<p class="meta">with your text: <span class="mono">{{.Text}}</span></p>{{end}}
   {{with .Err}}<p class="error">{{.}}</p>{{end}}
   {{end}}
 </div>

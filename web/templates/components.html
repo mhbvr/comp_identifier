@@ -35,12 +35,52 @@
   <section class="card">
     <h2>Add a component</h2>
     <form method="post" action="/inventory/components" enctype="multipart/form-data" class="grid">
-      <label>Name (part number) <input type="text" name="name" required></label>
-      <label>Description <input type="text" name="description"></label>
+      <label>Name (part number)
+        <span class="row">
+          <input type="text" name="name" id="new-name" required>
+          {{if .HasClaude}}<button type="button" id="ask-claude" onclick="describePart(this)">Ask Claude</button>{{end}}
+        </span>
+      </label>
+      {{if .HasClaude}}<p class="meta" id="ask-status">Ask Claude fills in the description (and a datasheet link if it knows one) from the name. A few hundred input tokens.</p>{{end}}
+      <label>Description <input type="text" name="description" id="new-description"></label>
       <label>Datasheet <input type="file" name="datasheet"></label>
+      <label>or datasheet URL (a PDF, downloaded after adding) <input type="text" name="datasheet_url" id="new-datasheet-url" placeholder="https://..."></label>
       <div><button>Add component</button></div>
     </form>
   </section>
+  {{if .HasClaude}}
+  <script>
+    // Ask Claude to describe the part number typed in the name field.
+    async function describePart(btn) {
+      const name = document.getElementById("new-name");
+      const status = document.getElementById("ask-status");
+      const show = (text, cls) => { status.textContent = text; status.className = cls; };
+      if (!name.value.trim()) { show("Type the part number first.", "error"); name.focus(); return; }
+      btn.disabled = true;
+      show("Asking Claude about " + name.value.trim() + "…", "meta");
+      try {
+        const resp = await fetch("/inventory/describe", { method: "POST", body: new URLSearchParams({ name: name.value }) });
+        const a = await resp.json();
+        if (!resp.ok) throw new Error(a.error || resp.statusText);
+        document.getElementById("new-description").value = a.description;
+        if (a.datasheet_url) document.getElementById("new-datasheet-url").value = a.datasheet_url;
+        show("Claude: " + a.part_number + " · confidence " + a.confidence + " · " +
+             a.input_tokens + " input + " + a.output_tokens + " output tokens · " + a.model, "meta");
+        if (a.part_number && a.part_number.toUpperCase() !== name.value.trim().toUpperCase()) {
+          const use = document.createElement("button");
+          use.type = "button"; use.className = "small";
+          use.textContent = "Use " + a.part_number + " as the name";
+          use.onclick = () => { name.value = a.part_number; use.remove(); };
+          status.append(" ", use);
+        }
+      } catch (e) {
+        show("Claude: " + e.message, "error");
+      } finally {
+        btn.disabled = false;
+      }
+    }
+  </script>
+  {{end}}
 </main>
 </body>
 </html>
@@ -64,6 +104,7 @@
   .grid { display: grid; gap: .6rem; max-width: 36rem; }
   .grid label { display: grid; gap: .2rem; font-size: .85rem; color: #444; }
   .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  .row input[type=text] { flex: 1; min-width: 10rem; }
   form.inline { display: inline; }
   .items { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 1rem; }
   .item { background: #fff; border-radius: 6px; padding: .6rem; display: grid; grid-template-columns: minmax(0, 1fr); gap: .4rem; align-content: start; }

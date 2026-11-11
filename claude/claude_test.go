@@ -40,7 +40,7 @@ func TestIdentify(t *testing.T) {
 	srv, req, hdr := fakeAPI(t, okReply)
 	c := New("", option.WithBaseURL(srv.URL), option.WithAPIKey("test"))
 	img := image.NewRGBA(image.Rect(0, 0, 1000, 360)) // a long DIP crop
-	id, err := c.Identify(context.Background(), img, "TL3S42 / 46M")
+	id, err := c.Identify(context.Background(), img, "TL3S42 / 46M", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,8 +67,50 @@ func TestIdentify(t *testing.T) {
 	if err != nil || src["media_type"] != "image/jpeg" || cfg.Width != 512 || cfg.Height != 184 {
 		t.Errorf("image %v %dx%d, err %v", src["media_type"], cfg.Width, cfg.Height, err)
 	}
-	if hint := content[1].(map[string]any)["text"]; hint != "OCR hint: TL3S42 / 46M" {
-		t.Errorf("hint = %q", hint)
+	if hint := content[1].(map[string]any)["text"]; hint != "OCR hint: TL3S42 / 46M" || len(content) != 2 {
+		t.Errorf("hint = %q, %d blocks", hint, len(content))
+	}
+	required := oc["format"].(map[string]any)["schema"].(map[string]any)["required"].([]any)
+	if len(required) != 6 {
+		t.Errorf("required = %v", required)
+	}
+}
+
+func TestIdentifyUserText(t *testing.T) {
+	srv, req, _ := fakeAPI(t, okReply)
+	c := New("", option.WithBaseURL(srv.URL), option.WithAPIKey("test"))
+	if _, err := c.Identify(context.Background(), image.NewRGBA(image.Rect(0, 0, 40, 30)), "", " 470uF 25V "); err != nil {
+		t.Fatal(err)
+	}
+	content := (*req)["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(content) != 3 || content[2].(map[string]any)["text"] != "Text the user read on the part: 470uF 25V" {
+		t.Errorf("content = %v", content[1:])
+	}
+}
+
+func TestDescribe(t *testing.T) {
+	srv, req, _ := fakeAPI(t, `{"id":"msg_3","type":"message","role":"assistant","model":"claude-opus-5-5",
+	 "content":[{"type":"text","text":"{\"part_number\":\"NE555P\",\"manufacturer\":\"Texas Instruments\",\"description\":\"precision timer, DIP-8\",\"datasheet_url\":\"\",\"confidence\":\"high\"}"}],
+	 "stop_reason":"end_turn","usage":{"input_tokens":200,"output_tokens":60}}`)
+	c := New("", option.WithBaseURL(srv.URL), option.WithAPIKey("test"))
+	id, err := c.Describe(context.Background(), " ne555 ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id.PartNumber != "NE555P" || id.Description != "precision timer, DIP-8" || id.Marking != "" || id.InputTokens != 200 {
+		t.Errorf("answer = %+v", id)
+	}
+	r := *req
+	content := r["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(content) != 1 || content[0].(map[string]any)["text"] != "Part number: ne555" {
+		t.Errorf("content = %v", content)
+	}
+	props := r["output_config"].(map[string]any)["format"].(map[string]any)["schema"].(map[string]any)["properties"].(map[string]any)
+	if _, ok := props["marking"]; ok || len(props) != 5 || r["fallbacks"] != "default" {
+		t.Errorf("schema properties %v, fallbacks %v", props, r["fallbacks"])
+	}
+	if _, err := c.Describe(context.Background(), "  "); err == nil {
+		t.Error("empty part number accepted")
 	}
 }
 
@@ -76,7 +118,7 @@ func TestIdentifyRefusal(t *testing.T) {
 	srv, _, _ := fakeAPI(t, `{"id":"msg_2","type":"message","role":"assistant","model":"claude-opus-5-5","content":[],
 	 "stop_reason":"refusal","stop_details":{"type":"refusal","category":"cyber","explanation":""},"usage":{"input_tokens":1,"output_tokens":1}}`)
 	c := New("", option.WithBaseURL(srv.URL), option.WithAPIKey("test"))
-	if _, err := c.Identify(context.Background(), image.NewRGBA(image.Rect(0, 0, 10, 10)), ""); err == nil || !strings.Contains(err.Error(), "declined") {
+	if _, err := c.Identify(context.Background(), image.NewRGBA(image.Rect(0, 0, 10, 10)), "", ""); err == nil || !strings.Contains(err.Error(), "declined") {
 		t.Errorf("err = %v", err)
 	}
 }

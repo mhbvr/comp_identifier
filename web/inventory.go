@@ -1,6 +1,8 @@
 package web
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -12,6 +14,8 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/mhbvr/comp_identifier/inventory"
 )
@@ -19,7 +23,8 @@ import (
 // The inventory pages browse and edit the component database:
 //
 //	GET  /inventory                        components (search: ?q=), form to add one
-//	POST /inventory/components             add a component
+//	POST /inventory/components             add a component (and fetch datasheet_url)
+//	POST /inventory/describe               ask Claude about a part number (JSON)
 //	GET  /inventory/components/{id}        a component and its items
 //	POST /inventory/components/{id}        edit name, description, upload a datasheet
 //	POST /inventory/components/{id}/delete delete it with its items
@@ -36,6 +41,7 @@ import (
 func (s *Server) inventoryRoutes() {
 	s.mux.HandleFunc("GET /inventory", s.componentsPage)
 	s.mux.HandleFunc("POST /inventory/components", s.createComponent)
+	s.mux.HandleFunc("POST /inventory/describe", s.describeComponent)
 	s.mux.HandleFunc("GET /inventory/components/{id}", s.componentPage)
 	s.mux.HandleFunc("POST /inventory/components/{id}", s.editComponent)
 	s.mux.HandleFunc("POST /inventory/components/{id}/delete", s.deleteComponent)
@@ -63,6 +69,7 @@ func files(dir string) http.Handler {
 // Page data.
 type (
 	componentsView struct {
+		HasClaude  bool // offer "Ask Claude" for the description
 		Query      string
 		Components []inventory.Component
 		Items      int
@@ -105,7 +112,7 @@ func pathID(r *http.Request) int64 {
 func componentURL(id int64) string { return fmt.Sprintf("/inventory/components/%d", id) }
 
 func (s *Server) componentsPage(w http.ResponseWriter, r *http.Request) {
-	v := componentsView{Query: r.FormValue("q"), Err: r.FormValue("err")}
+	v := componentsView{HasClaude: s.claude != nil, Query: r.FormValue("q"), Err: r.FormValue("err")}
 	var err error
 	if v.Components, err = s.inv.Components(v.Query); err != nil {
 		v.Err = err.Error()
@@ -155,7 +162,52 @@ func (s *Server) createComponent(w http.ResponseWriter, r *http.Request) {
 		back(w, r, "/inventory", err)
 		return
 	}
-	back(w, r, componentURL(id), s.saveDatasheet(r, id))
+	// An uploaded datasheet wins over a URL (filled in by "Ask Claude"),
+	// which is downloaded in the background.
+	data, name, err := upload(r, "datasheet")
+	u := strings.TrimSpace(r.FormValue("datasheet_url"))
+	switch {
+	case err != nil:
+	case data != nil:
+		err = s.inv.SetDatasheet(id, name, data)
+	case strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "http://"):
+		go s.fetchDatasheet(id, u)
+	}
+	back(w, r, componentURL(id), err)
+}
+
+// describeComponent asks Claude about the part number in the form value
+// "name", for the "Ask Claude" button of the new-component form. The
+// answer is JSON: part_number, description (with the manufacturer),
+// datasheet_url, confidence, model and token counts; or error.
+func (s *Server) describeComponent(w http.ResponseWriter, r *http.Request) {
+	reply := func(code int, v any) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		json.NewEncoder(w).Encode(v)
+	}
+	if s.claude == nil {
+		reply(http.StatusNotFound, map[string]string{"error": "Claude is disabled"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+	res, err := s.claude.Describe(ctx, r.FormValue("name"))
+	if err != nil {
+		log.Printf("claude: describe %q: %v", r.FormValue("name"), err)
+		reply(http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	log.Printf("claude: describe %q: %s (%s), %d input + %d output tokens", r.FormValue("name"), res.PartNumber, res.Model, res.InputTokens, res.OutputTokens)
+	reply(http.StatusOK, map[string]any{
+		"part_number":   res.PartNumber,
+		"description":   describe(res),
+		"datasheet_url": res.DatasheetURL,
+		"confidence":    res.Confidence,
+		"model":         res.Model,
+		"input_tokens":  res.InputTokens,
+		"output_tokens": res.OutputTokens,
+	})
 }
 
 func (s *Server) editComponent(w http.ResponseWriter, r *http.Request) {

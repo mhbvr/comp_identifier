@@ -84,11 +84,15 @@ type matchCache struct {
 
 // ask is a Claude identification of one reading.
 type ask struct {
-	id   int // tracker.Reading.ID
+	id   int    // tracker.Reading.ID
+	text string // text the user read on the part, sent with the photo
 	busy bool
 	res  *claude.Identification
 	err  error
 }
+
+// maxUserText caps the text the user can send with a photo.
+const maxUserText = 500
 
 // ClaudeView is what the page shows about Claude for the current reading.
 type ClaudeView struct {
@@ -96,6 +100,7 @@ type ClaudeView struct {
 	Model    string
 	Estimate int // approximate input tokens of the request
 	Busy     bool
+	Text     string // the user's text sent with the request
 	Result   *claude.Identification
 	Err      error
 }
@@ -121,6 +126,7 @@ type view struct {
 	Claude       *ClaudeView    // nil when disabled or there is no reading
 	Inventory    *InventoryView // nil without a database or a reading
 	HasInventory bool           // for the navigation links
+	HasClaude    bool           // for the text-for-Claude box
 }
 
 // New returns the app's HTTP handler. id may be nil to disable Claude, inv
@@ -153,7 +159,7 @@ func (s *Server) page(name string) http.HandlerFunc {
 }
 
 func (s *Server) view() view {
-	v := view{Snapshot: s.tracker.Snapshot(), HasInventory: s.inv != nil}
+	v := view{Snapshot: s.tracker.Snapshot(), HasInventory: s.inv != nil, HasClaude: s.claude != nil}
 	r := v.Current
 	if r == nil {
 		return v
@@ -165,7 +171,7 @@ func (s *Server) view() view {
 		ask = s.ask
 	}
 	if s.claude != nil {
-		v.Claude = &ClaudeView{ID: r.ID, Model: s.claude.Model(), Busy: ask.busy, Result: ask.res, Err: ask.err}
+		v.Claude = &ClaudeView{ID: r.ID, Model: s.claude.Model(), Busy: ask.busy, Text: ask.text, Result: ask.res, Err: ask.err}
 		if cfg, err := png.DecodeConfig(bytes.NewReader(r.CropPNG)); err == nil {
 			v.Claude.Estimate = claude.EstimateTokens(cfg.Width, cfg.Height)
 		}
@@ -312,8 +318,10 @@ func describe(res *claude.Identification) string {
 	return d
 }
 
-// identify sends the current reading to Claude (POST /claude/{id}). Each
-// reading is sent at most once, unless the previous attempt failed.
+// identify sends the current reading to Claude (POST /claude/{id}), with
+// the form value "text": what the user read on the part themselves, for
+// markings the camera can't see. A reading is sent again only after a
+// failure or with a different text.
 func (s *Server) identify(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.Atoi(r.PathValue("id"))
 	cur := s.tracker.Snapshot().Current
@@ -325,18 +333,23 @@ func (s *Server) identify(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "that component is no longer in view", http.StatusConflict)
 		return
 	}
+	text := strings.TrimSpace(r.FormValue("text"))
+	if len(text) > maxUserText {
+		http.Error(w, fmt.Sprintf("the text for Claude is longer than %d characters", maxUserText), http.StatusBadRequest)
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.ask.id == id && (s.ask.busy || s.ask.res != nil) {
+	if s.ask.id == id && (s.ask.busy || s.ask.res != nil && s.ask.text == text) {
 		w.WriteHeader(http.StatusNoContent) // already asked
 		return
 	}
-	s.ask = ask{id: id, busy: true}
+	s.ask = ask{id: id, text: text, busy: true}
 	go func() {
-		res, err := s.askClaude(cur)
+		res, err := s.askClaude(cur, text)
 		s.mu.Lock()
 		if s.ask.id == id {
-			s.ask = ask{id: id, res: res, err: err}
+			s.ask = ask{id: id, text: text, res: res, err: err}
 		}
 		s.mu.Unlock()
 		if err != nil {
@@ -348,14 +361,14 @@ func (s *Server) identify(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func (s *Server) askClaude(r *tracker.Reading) (*claude.Identification, error) {
+func (s *Server) askClaude(r *tracker.Reading, text string) (*claude.Identification, error) {
 	img, err := png.Decode(bytes.NewReader(r.CropPNG))
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	return s.claude.Identify(ctx, img, strings.Join(r.Lines, " / "))
+	return s.claude.Identify(ctx, img, strings.Join(r.Lines, " / "), text)
 }
 
 // live relays the camera's MJPEG stream: every new frame, unchanged.
