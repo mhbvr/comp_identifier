@@ -115,7 +115,17 @@ removed (3 empty detections) ──► Empty
 ## Identification with Claude (`claude`)
 
 - **On request only**: the button or the `i` key, for the reading on screen, at most once per reading
-  (a failed request can be retried).
+  and text (a failed request can be retried).
+- **Text for Claude.** A box on the camera page takes text the user read on the part, for markings
+  the camera can't see (the side of a cylindrical package, the underside). It goes as a third text
+  block after the OCR hint, and the system prompt tells Claude to trust it over the photo and to
+  include it in the marking, so it ends up in the item's marking when the part is added. The box
+  sits outside the panel that is re-rendered every 300 ms, so typing isn't lost, and the `i`/`a`
+  shortcuts are ignored while typing. Asking again with a different text sends a new request.
+- **Describing a part number** (`Describe`), for components added by hand: a text-only request (part
+  number in, the same answer without the marking out), a few hundred input tokens. The form's
+  **Ask Claude** button calls `POST /inventory/describe` and fills in the description and datasheet
+  URL; the URL is downloaded in the background once the component is added, if it serves a PDF.
 - **Small requests.** About 600 input tokens:
   - the upright colour crop scaled to fit 512×384 as JPEG (images cost ⌈w/28⌉×⌈h/28⌉ visual tokens,
     so at most 266);
@@ -161,7 +171,7 @@ removed (3 empty detections) ──► Empty
   (move it) or identified by Claude, so names stay canonical part numbers rather than OCR guesses.
   The inventory pages can still add and edit anything by hand.
 - **Inventory pages** are plain server-rendered HTML forms (POST, then redirect), with no
-  JavaScript besides delete confirmations.
+  JavaScript besides delete confirmations and the **Ask Claude** button of the new-component form.
 
 ## Removed along the way
 

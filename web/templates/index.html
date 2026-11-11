@@ -8,7 +8,11 @@
   .working { stroke: var(--working); color: var(--working); }
   .reliable { stroke: var(--reliable); color: var(--reliable); }
   .unreliable { stroke: var(--unreliable); color: var(--unreliable); }
-  #result { flex: 0 1 24rem; min-width: 16rem; background: #fff; padding: 1rem; border-radius: 6px; }
+  .side { flex: 0 1 24rem; min-width: 16rem; display: flex; flex-direction: column; gap: 1rem; }
+  #result, #note { background: #fff; padding: 1rem; border-radius: 6px; }
+  #note label { display: block; font-weight: 600; margin-bottom: .3rem; }
+  #note textarea { width: 100%; resize: vertical; }
+  #note .row { display: flex; gap: .5rem; align-items: center; margin-top: .4rem; }
   .status { font-weight: 600; margin: 0 0 .6rem; }
   .text { font: 600 1.5rem/1.25 ui-monospace, monospace; margin: .4rem 0; white-space: pre-line; }
   figure { margin: .6rem 0; }
@@ -37,14 +41,37 @@
     <img src="/live.mjpeg" alt="live camera view">
     {{template "overlay" .}}
   </div>
-  {{template "result" .}}
+  <div class="side">
+    {{if .HasClaude}}
+    <section id="note">
+      <label for="note-text">Text for Claude</label>
+      <textarea id="note-text" rows="2" maxlength="500"
+        placeholder="Marking the camera can't see, e.g. on the side of a capacitor: 470µF 25V 105°C"></textarea>
+      <div class="row">
+        <button type="button" onclick="askClaude()">Ask Claude with this text</button>
+        <span class="meta hint"><kbd>Ctrl</kbd>+<kbd>Enter</kbd></span>
+      </div>
+      <p class="meta">Sent with the photo whenever you ask Claude. Changing it and asking again sends a new request. Cleared when the part is taken away.</p>
+    </section>
+    {{end}}
+    {{template "result" .}}
+  </div>
 </main>
 <script>
-  // Identify the component on screen with Claude: button or the "i" key.
+  // Identify the component on screen with Claude: a button, the "i" key, or
+  // Ctrl+Enter in the text box, whose text (markings the camera can't see)
+  // goes with the photo. The server ignores a repeat with the same text.
+  const note = document.getElementById("note-text");
   function askClaude() {
+    const id = document.getElementById("result").dataset.reading;
     const b = document.getElementById("claude-btn");
-    if (b && !b.disabled) fetch("/claude/" + b.dataset.id, { method: "POST" });
+    if (!id || (b && b.disabled)) return;
+    const body = new URLSearchParams({ text: note ? note.value : "" });
+    fetch("/claude/" + id, { method: "POST", body });
   }
+  if (note) note.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); askClaude(); }
+  });
   // Add the part to the database: an "Add" button, or the "a" key for the
   // first one (the best match, else Claude's part as a new component).
   function addItem(b) {
@@ -55,12 +82,14 @@
   }
   document.addEventListener("keydown", (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target.closest("input, textarea, select")) return; // typing, not a shortcut
     if (e.key === "i") askClaude();
     if (e.key === "a") addItem(document.querySelector("button.add"));
   });
 
-  // Re-render the dynamic parts (#overlay, #result) from /panel.
-  let last = "";
+  // Re-render the dynamic parts (#overlay, #result) from /panel. When the
+  // part is taken away, the text for Claude is cleared for the next one.
+  let last = "", reading = "";
   setInterval(async () => {
     try {
       const html = await (await fetch("/panel")).text();
@@ -69,6 +98,9 @@
       const t = document.createElement("template");
       t.innerHTML = html;
       for (const el of [...t.content.children]) document.getElementById(el.id).replaceWith(el);
+      const now = document.getElementById("result").dataset.reading;
+      if (reading && !now && note) note.value = "";
+      reading = now;
     } catch (e) { /* server restarting: try again next tick */ }
   }, 300);
 </script>

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -251,5 +252,30 @@ func TestMatch(t *testing.T) {
 	ms, _ := d.Match("18ADETM E4\nCD4026BE")
 	if len(ms) != 1 || ms[0].By != "marking" || !ms[0].Exact() {
 		t.Errorf("same marking as an item: %+v", ms)
+	}
+}
+
+func TestWriteMarkdown(t *testing.T) {
+	var b strings.Builder
+	err := WriteMarkdown(&b, []Component{
+		{ID: 7, Name: "NE555P", Description: "timer | DIP-8\nprecision", Items: 3, Datasheet: "NE555P.pdf"},
+		{ID: 2, Name: "TL072IP", Description: `dual op-amp, 18 V \ DIP-8`},
+		{ID: 3, Name: "380N"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "# Components\n\n3 components.\n\n" +
+		"| ID | Name | Description |\n|---:|---|---|\n" +
+		"| 2 | TL072IP | dual op-amp, 18 V \\\\ DIP-8 |\n" +
+		"| 3 | 380N |  |\n" +
+		"| 7 | NE555P | timer \\| DIP-8 precision |\n"
+	if b.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", b.String(), want)
+	}
+	b.Reset()
+	WriteMarkdown(&b, nil)
+	if b.String() != "# Components\n\n0 components.\n\n" {
+		t.Errorf("empty: %q", b.String())
 	}
 }

@@ -13,6 +13,11 @@
 // No web search is used: search results add thousands of input tokens per
 // request. The datasheet URL therefore comes from Claude's knowledge and is
 // left empty when Claude isn't sure.
+//
+// Identify can also take text the user read on the part themselves, for
+// markings the camera cannot see (the side of a cylindrical capacitor, the
+// underside). Describe identifies a part from its part number alone, with
+// no image, for components entered by hand.
 package claude
 
 import (
@@ -25,6 +30,8 @@ import (
 	"image"
 	"image/jpeg"
 	"math"
+	"sort"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go/v2"
 	"github.com/anthropics/anthropic-sdk-go/v2/option"
@@ -44,21 +51,45 @@ const promptTokens = 350
 const systemPrompt = `You identify electronic components (ICs, transistors, regulators, ...) from a photo of the top of the package.
 Read the marking, then give the canonical manufacturer part number (without date, lot or plant codes), the manufacturer, and a short description including the package.
 Give datasheet_url only if you are sure of the manufacturer's datasheet or product page URL; otherwise leave it empty.
-The OCR hint comes from a local OCR engine and may contain errors.`
+The OCR hint comes from a local OCR engine and may contain errors.
+The user may add text they read on the part themselves, for example from the side of a cylindrical package or a face the camera cannot see. Trust it over the photo and the OCR hint, and include it in marking.`
 
-// schema constrains the answer; every field is required.
-var schema = map[string]any{
-	"type": "object",
-	"properties": map[string]any{
-		"marking":       map[string]any{"type": "string", "description": "text printed on the part, lines separated by ' / '"},
-		"part_number":   map[string]any{"type": "string", "description": "canonical part number, e.g. TLC555IP"},
-		"manufacturer":  map[string]any{"type": "string"},
-		"description":   map[string]any{"type": "string", "description": "e.g. 'CMOS 555 timer, DIP-8'"},
-		"datasheet_url": map[string]any{"type": "string"},
-		"confidence":    map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
-	},
-	"required":             []string{"marking", "part_number", "manufacturer", "description", "datasheet_url", "confidence"},
-	"additionalProperties": false,
+const describePrompt = `You describe an electronic component (IC, transistor, regulator, capacitor, ...) from the part number the user typed, which may lack a suffix or have minor typos.
+Give the canonical manufacturer part number, the manufacturer, and a short description, including the package when the part number tells it.
+Give datasheet_url only if you are sure of the manufacturer's datasheet or product page URL; otherwise leave it empty.
+If you don't recognise the part, say so in the description and set confidence to low.`
+
+// partFields are the answer fields about the part; every field is required.
+var partFields = map[string]any{
+	"part_number":   map[string]any{"type": "string", "description": "canonical part number, e.g. TLC555IP"},
+	"manufacturer":  map[string]any{"type": "string"},
+	"description":   map[string]any{"type": "string", "description": "e.g. 'CMOS 555 timer, DIP-8'"},
+	"datasheet_url": map[string]any{"type": "string"},
+	"confidence":    map[string]any{"type": "string", "enum": []string{"high", "medium", "low"}},
+}
+
+// schema constrains the answer of Identify, describeSchema that of Describe.
+var (
+	schema         = objectSchema(partFields, "marking", map[string]any{"type": "string", "description": "text printed on the part, lines separated by ' / '"})
+	describeSchema = objectSchema(partFields)
+)
+
+// objectSchema is a JSON schema of an object with the given fields, all
+// required, plus extra name/schema pairs.
+func objectSchema(fields map[string]any, extra ...any) map[string]any {
+	props := map[string]any{}
+	for k, v := range fields {
+		props[k] = v
+	}
+	for i := 0; i+1 < len(extra); i += 2 {
+		props[extra[i].(string)] = extra[i+1]
+	}
+	required := make([]string, 0, len(props))
+	for k := range props {
+		required = append(required, k)
+	}
+	sort.Strings(required)
+	return map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": false}
 }
 
 // Identification is Claude's answer plus the request's token usage.
@@ -102,23 +133,45 @@ func EstimateTokens(w, h int) int {
 }
 
 // Identify asks Claude what the component in img is. ocr is the local OCR
-// reading, sent as a hint.
-func (c *Identifier) Identify(ctx context.Context, img image.Image, ocr string) (*Identification, error) {
+// reading, sent as a hint. user is text the user read on the part
+// themselves ("" for none), which Claude trusts over the photo.
+func (c *Identifier) Identify(ctx context.Context, img image.Image, ocr, user string) (*Identification, error) {
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, shrink(img), &jpeg.Options{Quality: 90}); err != nil {
 		return nil, err
 	}
+	content := []anthropic.BetaContentBlockParamUnion{
+		anthropic.NewBetaImageBlock(anthropic.BetaBase64ImageSourceParam{
+			Data:      base64.StdEncoding.EncodeToString(buf.Bytes()),
+			MediaType: anthropic.BetaBase64ImageSourceMediaTypeImageJPEG,
+		}),
+		anthropic.NewBetaTextBlock("OCR hint: " + ocr),
+	}
+	if user = strings.TrimSpace(user); user != "" {
+		content = append(content, anthropic.NewBetaTextBlock("Text the user read on the part: "+user))
+	}
+	return c.ask(ctx, systemPrompt, schema, content)
+}
+
+// Describe asks Claude what the component with part number name is, with
+// no photo. The answer's Marking is empty.
+func (c *Identifier) Describe(ctx context.Context, name string) (*Identification, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, errors.New("no part number to describe")
+	}
+	return c.ask(ctx, describePrompt, describeSchema, []anthropic.BetaContentBlockParamUnion{
+		anthropic.NewBetaTextBlock("Part number: " + name),
+	})
+}
+
+// ask sends one schema-constrained request and decodes the answer.
+func (c *Identifier) ask(ctx context.Context, system string, schema map[string]any, content []anthropic.BetaContentBlockParamUnion) (*Identification, error) {
 	resp, err := c.client.Beta.Messages.New(ctx, anthropic.BetaMessageNewParams{
 		Model:     c.model,
 		MaxTokens: 4096, // the JSON is ~100 tokens; the rest is room for thinking
-		System:    []anthropic.BetaTextBlockParam{{Text: systemPrompt}},
-		Messages: []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(
-			anthropic.NewBetaImageBlock(anthropic.BetaBase64ImageSourceParam{
-				Data:      base64.StdEncoding.EncodeToString(buf.Bytes()),
-				MediaType: anthropic.BetaBase64ImageSourceMediaTypeImageJPEG,
-			}),
-			anthropic.NewBetaTextBlock("OCR hint: "+ocr),
-		)},
+		System:    []anthropic.BetaTextBlockParam{{Text: system}},
+		Messages:  []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(content...)},
 		OutputConfig: anthropic.BetaOutputConfigParam{
 			Effort: anthropic.BetaOutputConfigEffortLow,
 			Format: anthropic.BetaJSONOutputFormatParam{Schema: schema},

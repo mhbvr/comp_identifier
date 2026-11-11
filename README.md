@@ -94,12 +94,23 @@ compdb/datasheets/     datasheets (file names in components.datasheet)
   part too, when the local reading is wrong; the lookup then uses Claude's answer.
 - **Components** and **Items** (links at the top, `/inventory`) browse, search and edit the
   database: rename components, upload datasheets, fix markings, move items to another component,
-  add items by hand, delete.
+  add items by hand, delete. When adding a component by hand, **Ask Claude** fills in the
+  description (and a datasheet URL if Claude knows one) from the name, with no photo, and offers
+  Claude's canonical part number as the name.
+- **Export as Markdown** (Components tab, `/inventory/export.md`) downloads `components.md`: a
+  table of ID, name and description of every component (or of those found by the current search),
+  easy to read or to give to an AI assistant. Items, photos and datasheets are left out.
 
 **Identify with Claude:** press the button or the **i** key. It costs about 600 input tokens per
 part; nothing is sent without your request. Credentials come from `ANTHROPIC_API_KEY` or `ant auth
 login`. `-claude=false` hides the button and `-claude-model` picks the model (default
 `claude-opus-5-5`). Details: [doc/design.md](doc/design.md#identification-with-claude-claude).
+
+**Text for Claude:** for markings the camera can't see (the side of a cylindrical capacitor, the
+underside), type what you read into the box above the result and press **Ask Claude with this
+text** (or **Ctrl+Enter**). The text goes with the photo, and Claude trusts it over the photo.
+Changing the text and asking again sends a new request. The box is cleared when the part is taken
+away.
 
 Without a Pi, the fake camera serves photos, alternating with empty paper:
 
