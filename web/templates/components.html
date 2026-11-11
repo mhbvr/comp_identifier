@@ -14,10 +14,11 @@
   <p class="meta">{{len .Components}} component{{if ne (len .Components) 1}}s{{end}}{{if .Query}} matching “{{.Query}}”{{end}}, {{.Items}} item{{if ne .Items 1}}s{{end}}</p>
   {{if .Components}}
   <table>
-    <thead><tr><th></th><th>Name</th><th>Description</th><th>Items</th><th>Datasheet</th></tr></thead>
+    <thead><tr><th>ID</th><th></th><th>Name</th><th>Description</th><th>Items</th><th>Datasheet</th></tr></thead>
     <tbody>
     {{range .Components}}
     <tr>
+      <td class="num id">{{.ID}}</td>
       <td>{{template "thumb" .Photo}}</td>
       <td class="name"><a href="/inventory/components/{{.ID}}">{{.Name}}</a></td>
       <td>{{.Description}}</td>
@@ -56,6 +57,7 @@
   th { font-size: .8rem; color: var(--muted); font-weight: 600; background: #fafafa; }
   td.name { font: 600 1rem ui-monospace, monospace; white-space: nowrap; }
   td.num { text-align: right; }
+  td.id { font: 600 1rem ui-monospace, monospace; text-align: left; }
   .thumb { width: 64px; height: 48px; object-fit: contain; border: 1px solid var(--line); background: #fff; display: block; }
   .thumb.none { background: #f0f0f0; }
   .card { background: #fff; border-radius: 6px; padding: 1rem; margin: 1rem 0; }

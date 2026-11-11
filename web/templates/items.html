@@ -13,13 +13,14 @@
   <p class="meta">{{len .Items}} item{{if ne (len .Items) 1}}s{{end}}{{if .Query}} matching “{{.Query}}”{{end}}, newest first</p>
   {{if .Items}}
   <table>
-    <thead><tr><th></th><th>#</th><th>Component</th><th>Marking</th></tr></thead>
+    <thead><tr><th></th><th>Item ID</th><th>Component</th><th>Component ID</th><th>Marking</th></tr></thead>
     <tbody>
     {{range .Items}}
     <tr>
       <td>{{if .Photo}}<a href="/db/photos/{{.Photo}}" target="_blank">{{template "thumb" .Photo}}</a>{{else}}{{template "thumb" ""}}{{end}}</td>
-      <td class="num">{{.ID}}</td>
+      <td>{{.ID}}</td>
       <td class="name"><a href="/inventory/components/{{.ComponentID}}#item{{.ID}}">{{.ComponentName}}</a></td>
+      <td class="num id">{{.ComponentID}}</td>
       <td class="mono">{{.Marking}}</td>
     </tr>
     {{end}}

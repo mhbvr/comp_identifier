@@ -59,6 +59,7 @@
 <div class="inventory">
   {{with .Added}}
   <p class="added">Added item #{{.ID}} of <a href="/inventory/components/{{.ComponentID}}">{{.ComponentName}}</a></p>
+  <p class="added-cid">Component ID <strong>#{{.ComponentID}}</strong></p>
   {{else}}
   {{if .Matches}}{{with index .Matches 0}}
   <div class="known">
