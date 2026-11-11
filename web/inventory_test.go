@@ -97,7 +97,7 @@ func TestAddKnownComponent(t *testing.T) {
 	if code := add(url.Values{"component": {fmt.Sprint(cid)}}); code != http.StatusCreated {
 		t.Fatalf("add: %d", code)
 	}
-	waitPanel(t, srv.URL, "Added item #1 of")
+	waitPanel(t, srv.URL, fmt.Sprintf("Component ID <strong>#%d</strong>", cid))
 	if code := add(url.Values{"component": {fmt.Sprint(cid)}}); code != http.StatusNoContent {
 		t.Errorf("second add of the same reading: %d", code)
 	}
@@ -145,12 +145,11 @@ func TestAddNewComponentFromClaude(t *testing.T) {
 	if code := postForm(t, fmt.Sprintf("%s/add/%d", srv.URL, id), url.Values{"component": {"new"}}).StatusCode; code != http.StatusCreated {
 		t.Fatalf("add: %d", code)
 	}
-	waitPanel(t, srv.URL, "Added item #1 of")
-
 	c, err := inv.ComponentByName("LM35DZ")
 	if err != nil {
 		t.Fatal(err)
 	}
+	waitPanel(t, srv.URL, fmt.Sprintf("Component ID <strong>#%d</strong>", c.ID))
 	if c.Description != "temperature sensor, TO-92 (Texas Instruments)" || c.Items != 1 {
 		t.Errorf("component %+v", c)
 	}
@@ -222,9 +221,15 @@ func TestInventoryPages(t *testing.T) {
 	if !strings.Contains(body, `href="/inventory/components/`+fmt.Sprint(c.ID)+`"`) {
 		t.Error("search by description")
 	}
+	if !strings.Contains(body, fmt.Sprintf(`<td class="num id">%d</td>`, c.ID)) {
+		t.Error("components table lacks the ID column")
+	}
 	_, body = get(t, srv.URL+"/inventory/items?q=31AE")
 	if !strings.Contains(body, "TL072IP</a>") {
 		t.Error("items search")
+	}
+	if !strings.Contains(body, fmt.Sprintf("TL072IP</a></td>\n      <td class=\"num id\">%d</td>", c.ID)) {
+		t.Error("items table lacks the component ID after the name")
 	}
 
 	// Edit the component and the item, move the item, delete.
